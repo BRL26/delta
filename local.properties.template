@@ -1,0 +1,24 @@
+# This is a template for local.properties
+# Copy this file to local.properties and fill in your values.
+# local.properties is gitignored -- it is the one place secrets may live.
+
+# --- API keys (all optional; more keys = faster/better AI responses) ---
+# GEMINI_API_KEYS=key1,key2
+# TAVILY_API=your_tavily_key
+# MEM0_API=your_mem0_key
+# GOOGLE_TTS_API_KEY=your_google_tts_key
+# GCLOUD_GATEWAY_URL=
+# GCLOUD_GATEWAY_URL_KEY=
+# GCLOUD_PROXY_URL=
+# GCLOUD_PROXY_URL_KEY=
+
+# --- Delta release signing (optional) ---
+# Enables signing for `assembleRelease`. The key itself lives outside the repo
+# (e.g. ~/.android/delta-release.jks) -- never put the keystore in the repository.
+# DELTA_RELEASE_KEYSTORE=/home/you/.android/delta-release.jks
+# DELTA_RELEASE_KEY_ALIAS=delta
+# DELTA_RELEASE_KEYSTORE_PASSWORD=change-me
+# DELTA_RELEASE_KEY_PASSWORD=change-me   (optional; defaults to the keystore password)
+
+# Other Android SDK properties (these are usually auto-generated)
+# sdk.dir=/path/to/your/android/sdk

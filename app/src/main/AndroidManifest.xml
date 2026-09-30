@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- All Permissions from your app -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+        Required to mute and restore AudioManager.STREAM_SYSTEM around an open microphone,
+        which is how the recognition engine's "listening" tone gets silenced. See
+        VoiceInputController.silenceRecognitionTone for the whole story.
+    -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!--    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />-->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <application
+        android:name=".MyApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Delta"
+        tools:targetApi="31">
+
+        <!-- Your Activities -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <activity
+            android:name=".LoginActivity"
+            android:exported="true"
+            android:label="Login_activity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.BROWSABLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data
+                    android:host="black-radius-341415.firebaseapp.com"
+                    android:pathPrefix="/__/auth/action"
+                    android:scheme="https" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ChatActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".DialogueActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".OnboardingPermissionsActivity"
+            android:exported="false"
+            android:label="onboarding"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".PermissionsActivity"
+            android:exported="false"
+            android:label="@string/permissions_explained_title"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".MemoriesActivity"
+            android:exported="false"
+            android:label="My Memories"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".PrivacyActivity"
+            android:exported="false"
+            android:label="How Delta Remembers"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".RoleRequestActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+
+        <activity
+            android:name=".AssistEntryActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The top-level, always-resident voice interaction service. Holding
+          BIND_VOICE_INTERACTION is what makes the app selectable as the default
+          digital assistant, which is what puts the assistant popup behind a
+          long-press of the power button. Its body is deliberately trivial; the UI
+          lives in AssistantSessionService / AssistantSession.
+        -->
+        <service
+            android:name=".assistant.AssistantRoleService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+
+            <!--
+              Read by the platform via VoiceInteractionService.SERVICE_META_DATA
+              ("android.voice_interaction"). It must contain exactly one
+              <voice-interaction-service> root element whose sessionService and
+              recognitionService attributes name our classes.
+            -->
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+        </service>
+
+        <!--
+          AssistantSessionService is instantiated by the platform from the
+          `sessionService` string in the XML above rather than by name resolution, so
+          it needs no intent filter. It is still declared explicitly (and
+          BIND_VOICE_INTERACTION-gated) to match what shipping assistants do; the
+          declaration is also what lets R8 keep the class.
+        -->
+        <service
+            android:name=".assistant.AssistantSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
+        <!--
+          Required for AssistantRoleService to count as *qualified*. The platform
+          refuses to bind an assistant whose voice-interaction XML has no resolvable
+          recognitionService, which is why the service stays unbound and no session is
+          ever created without it.
+
+          It refuses every recognition request with ERROR_CLIENT. Speech is driven
+          from inside the session by VoiceInputController, against whichever recogniser
+          the user actually has installed, so that a transcript can be shown in the
+          popup as it is spoken.
+        -->
+        <service
+            android:name=".assistant.AssistantRecognitionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+        </service>
+
+        <!-- TEMP: exported=true only so `adb shell am start` can reach this screen
+             for on-device verification. Revert to false once confirmed. -->
+        <activity
+            android:name=".AiProvidersActivity"
+            android:exported="false"
+            android:label="AI Providers"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+
+        <activity
+            android:name=".triggers.ui.TriggersActivity"
+            android:exported="false"
+            android:label="Triggers"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".triggers.ui.CreateTriggerActivity"
+            android:exported="false"
+            android:label="Create Trigger"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".triggers.ui.ChooseTriggerTypeActivity"
+            android:exported="false"
+            android:label="Choose Trigger Type"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".ProPurchaseActivity"
+            android:exported="false"
+            android:label="Upgrade to Pro"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+        <activity
+            android:name=".MomentsActivity"
+            android:exported="false"
+            android:label="Moments"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+
+
+        <!-- Your Other Services -->
+        <service
+            android:name=".ScreenInteractionService"
+            android:exported="false"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--        <service-->
+        <!--            android:name=".ContentModerationService"-->
+        <!--            android:exported="false"-->
+        <!--            android:foregroundServiceType="dataSync" />-->
+
+        <!--        <service-->
+        <!--            android:name=".services.AgentTaskService"-->
+        <!--            android:exported="false"-->
+        <!--            android:foregroundServiceType="connectedDevice" />-->
+
+        <service
+            android:name=".v2.AgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+        <service
+            android:name=".triggers.TriggerMonitoringService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+        <service
+            android:name=".ConversationalAgentService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".services.FloatingDeltaButtonService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <service
+            android:name=".triggers.DeltaNotificationListenerService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Your Widget Provider -->
+        <receiver
+            android:name=".DeltaWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/delta_widget_info" />
+        </receiver>
+
+        <!-- Central receiver for all app triggers -->
+        <receiver
+            android:name=".triggers.TriggerReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.blurr.voice.action.EXECUTE_TASK" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receiver to reschedule alarms on device reboot -->
+        <receiver
+            android:name=".triggers.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Fires when a scheduled reminder comes due -->
+        <receiver
+            android:name=".reminders.ReminderReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.blurr.voice.action.FIRE_REMINDER" />
+                <action android:name="com.blurr.voice.action.DISMISS_REMINDER" />
+            </intent-filter>
+        </receiver>
+        <meta-data
+            android:name="preloaded_fonts"
+            android:resource="@array/preloaded_fonts" />
+
+        <activity
+            android:name=".TaskLogsListActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".TaskLogDetailsActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+    </application>
+
+</manifest>

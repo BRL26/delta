@@ -1,0 +1,42 @@
+<!--
+    The Delta mark, for the onboarding screen.
+
+    Drawn on a 140x96 canvas to match the ImageView it sits in, with the triangle
+    centred on that box rather than stretched to fill it: the view is not square, and a
+    triangle scaled to a rectangle is an isosceles-triangle-shaped wrong answer rather
+    than a delta. The side weights are the same as ic_launcher_foreground.xml, so the
+    mark is identical everywhere it appears.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="140dp"
+    android:height="96dp"
+    android:viewportWidth="140"
+    android:viewportHeight="96">
+
+    <!-- Left side, thin -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M70,14 L31,82" />
+
+    <!-- Base -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M31,82 L109,82" />
+
+    <!-- Right side, heavier -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.0"
+        android:strokeLineCap="butt"
+        android:strokeLineJoin="round"
+        android:pathData="M109,82 L70,14" />
+</vector>
