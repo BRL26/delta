@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Read by the platform from the "android.voice_interaction" <meta-data> on
+  AssistantRoleService. The root tag must be <voice-interaction-service>.
+
+  sessionService  Fully-qualified name of our VoiceInteractionSessionService subclass.
+                  The system instantiates it directly from this string, so it needs no
+                  <service> intent filter and R8 cannot see the reference (hence the
+                  -keep rules in proguard-rules.pro).
+  recognitionService  Fully-qualified name of our RecognitionService subclass.
+                  This is NOT optional. The platform only treats a
+                  VoiceInteractionService as qualified, and therefore only binds it and
+                  allows it to be invoked by the long-press or assist gesture, when
+                  this attribute is present and resolves to a service holding
+                  BIND_RECOGNITION_SERVICE. Omitting it produces the log line
+                    "Package ... has an unqualified voice interaction service"
+                  and leaves the assistant role grantable while the service stays
+                  permanently unbound, so no session is ever shown.
+                  Our implementation never touches the microphone; speech is driven
+                  from inside the session by VoiceInputController.
+  settingsActivity  Deep link used by Settings when the user configures the assistant.
+                  This points at the existing SettingsActivity rather than introducing
+                  an assistant-specific screen: the AI provider and the permissions
+                  all live there already, and a second configuration
+                  surface for the same settings would be a trap.
+  supportsAssist  Makes the service eligible to handle the assist action; together
+                  with BIND_VOICE_INTERACTION this qualifies us for ROLE_ASSISTANT.
+  supportsLaunchVoiceAssistFromKeyguard  Allow launching from the lock screen.
+  supportsLocalInteraction  Indicates the assistant can work without a network
+                  round trip, so the system does not hold up showing the session.
+-->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.blurr.voice.assistant.AssistantSessionService"
+    android:recognitionService="com.blurr.voice.assistant.AssistantRecognitionService"
+    android:settingsActivity="com.blurr.voice.SettingsActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"
+    android:supportsLocalInteraction="true" />

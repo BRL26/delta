@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Label inside the TTS caption overlay. Not a layout of its own, so it
+         cannot be declared in a layout file. -->
+    <item name="overlay_caption_text" type="id" />
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Debug builds only. Lets a dev drive the agent executor, the status pill
+        and the reminder scheduler from adb without speaking to the device.
+        Not part of any release build.
+    -->
+    <application>
+        <activity
+            android:name=".DevHarnessActivity"
+            android:exported="true"
+            android:label="Dev Harness" />
+    </application>
+
+</manifest>

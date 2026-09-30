@@ -1,0 +1,55 @@
+<!--
+    The assistant's mark: the delta, drawn to the same geometry the in-app symbol uses so
+    the launcher and the running app are recognisably the same thing.
+
+    The 108dp adaptive canvas only guarantees the middle 72dp survives every launcher mask,
+    so the triangle is scaled to 54 units across rather than filling the canvas. Scaled
+    from the 24-unit space of ic_delta_symbol.xml (apex 12,3 / base 3,19 to 21,19) by 3,
+    which puts its bounding box at y 9..57 and x 9..63.
+
+    Centring that box on the canvas would put the apex at y=28 and the base at y=77, and
+    that is measurably low. The three sides enclose far more area near the base than near
+    the apex, so the mark's mass sits at a centroid of y~60.7 against a canvas centre of
+    54: centred on the box, the mark looks like it is sliding down out of the icon. Nudged
+    up 4 units to y 24..73, which puts the mass back on the middle. Still comfortably
+    inside the 18..90 safe zone.
+
+    The three sides keep the weights of the in-app mark (thin on the left, heavier on
+    the right) because a delta with three identical sides does not read as the same
+    symbol. Monochrome launchers tint this path, so the stroke is opaque white and the
+    fill transparent: an outlined mark stays legible when a themed icon flattens it to a
+    single colour, which a filled one does not.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Left side, thin -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,24 L27,73" />
+
+    <!-- Base -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M27,73 L81,73" />
+
+    <!-- Right side, heavier -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="butt"
+        android:strokeLineJoin="round"
+        android:pathData="M81,73 L54,24" />
+</vector>
