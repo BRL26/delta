@@ -92,8 +92,15 @@ doesn't secretly break reflection-based code paths.
 
 ## Core capabilities
 
-* 🧠 **Intelligent UI automation** — Delta reads the screen, understands the UI layout,
-  and taps, swipes, and types to complete multi-step tasks across apps.
+* 🧰 **Tools-first agent** — before touching the screen, Delta checks its tool kit: open
+  any installed app, launch OS intents (timers, alarms, reminders, dialer, share, links,
+  email), search the web, read/write its file system, view file listings, read your
+  notifications, and report battery/screen/network state. Accessibility screen control is
+  used only when no tool fits the task. The decision protocol is baked into the system
+  prompt, and the tool catalog is the same single source of truth the LLM sees.
+* 🧠 **Intelligent UI automation (fallback)** — only for UI that no tool can reach (in-app
+  forms, third-party flows): Delta reads the screen, understands the UI layout, and taps,
+  swipes, and types to complete multi-step tasks.
 * 📢 **Voice-first conversation** — talk to it like an operator; it listens, acts, and
   speaks back. No tap-to-talk needed.
 * ⏰ **Triggers** — start tasks from a scheduled time, an incoming notification, a

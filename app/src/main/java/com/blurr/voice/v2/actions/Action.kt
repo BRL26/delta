@@ -40,6 +40,12 @@ sealed class Action {
     data class Done(val success: Boolean, val text: String, val filesToDisplay: List<String>? = null) : Action()
     // New: Launch an Android AppIntent by name with parameters
     data class LaunchIntent(val intentName: String, val parameters: Map<String, String>) : Action()
+    // --- Tool-style actions ---
+    // These read device or workspace state without touching the screen. The agent
+    // is told to prefer them over accessibility UI control whenever they fit.
+    data object Notifications : Action()
+    data object ListFiles : Action()
+    data object DeviceState : Action()
 
     // --- The Custom Serializer ---
     // This serializer is now data-driven, using the `allSpecs` map as its source of truth.
@@ -223,6 +229,25 @@ sealed class Action {
                         parameters = args["parameters"] as? Map<String, String> ?: emptyMap()
                     )
                 }
+            ),
+            // Tool-style actions: read state directly, never touch the screen.
+            "notifications" to Spec(
+                name = "notifications",
+                description = "Read the current active notifications on the device (titles and text), newest first. Requires notification access to be granted. Use this for any request about notifications, messages, alerts or updates instead of opening apps and reading their screens.",
+                params = emptyList(),
+                build = { Notifications }
+            ),
+            "list_files" to Spec(
+                name = "list_files",
+                description = "List every file in the agent's workspace with its line count. Use this BEFORE read_file when you need to know what files exist.",
+                params = emptyList(),
+                build = { ListFiles }
+            ),
+            "device_state" to Spec(
+                name = "device_state",
+                description = "Report device state: battery level and charging, screen on/off, and network connectivity (wifi or cellular). Use this instead of navigating to Settings screens.",
+                params = emptyList(),
+                build = { DeviceState }
             ),
         )
 

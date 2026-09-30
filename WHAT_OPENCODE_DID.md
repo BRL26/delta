@@ -200,8 +200,8 @@ The last stragglers were caught just before publishing:
 
 ## 6. Tests
 
-`./gradlew :app:testDebugUnitTest` — **56 tests / 0 failures** across
-`ConversationalAgentServiceTest`, `ExampleUnitTest`, `PlainTextTest`,
+`./gradlew :app:testDebugUnitTest` — **59 tests / 0 failures** across
+`ActionParsingTest`, `ConversationalAgentServiceTest`, `ExampleUnitTest`, `PlainTextTest`,
 `ReminderTimeParserTest`, `SessionCollapseModeTest`, `VersionManagementTest`.
 
 Two pre-existing test files do **not** compile on the project's `main` branch, broken
@@ -219,5 +219,32 @@ deliberately. The old repository's URL (`Ayush0Chaudhary/blurr`) and every
 pre-rebrand "Panda" commit are baked into the old git history, and pushing that history
 would permanently relink this project to the branding this release exists to distance
 itself from. No trace of the old repo remains in the new history.
+
+---
+
+## 8. Tools-first agent (follow-up feature)
+
+Highlights:
+- **System prompt rewritten** (`assets/prompts/system_prompt.md`): the agent now follows
+  a mandatory `<tool_selection_protocol>` — pick an OS-level tool first, and only fall
+  back to accessibility screen control when no tool fits. Screen rules are retitled
+  `<screen_control_rules>` and explicitly gated behind the protocol. `<android_state>`
+  is now described as fallback context, and the output examples show tool-only turns.
+- **Three new tools**, added to the single source of truth in `Action.kt` and wired into
+  `ActionExecutor`:
+  - `notifications` — reads the active notification shade from a live snapshot kept by
+    `DeltaNotificationListenerService` (new companion `current`, populated in
+    `onListenerConnected` / `onNotificationPosted` / `onNotificationRemoved`). No screen,
+    no app opening. Requires notification access, which is requested from the Triggers
+    screen.
+  - `list_files` — lists the agent workspace before `read_file`, so the model stops
+    guessing filenames.
+  - `device_state` — battery level/charging, screen on/off, connectivity read through
+    system services (needs the new `ACCESS_NETWORK_STATE` normal permission).
+- **File system** widened from `(md|txt)` to `(md|txt|json|csv|log)` so saved reports can
+  be anything the agent can read back.
+- Also: the status pill says "Working with tools" instead of "Looking at the screen",
+  and `ActionParsingTest.kt` pins the empty-`{}` argument parsing the tool actions rely
+  on (59 tests total, all green).
 
 *Written by OpenCode and the project owner, September 2026.*

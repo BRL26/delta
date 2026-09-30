@@ -95,7 +95,7 @@ class Agent(
 
         while (!state.stopped && state.nSteps <= maxSteps) {
             Log.d(TAG,"\n--- Step ${state.nSteps}/$maxSteps ---")
-            overlay.showAgentStatus(initialTask, "Looking at the screen", state.nSteps, maxSteps, stopAgent)
+            overlay.showAgentStatus(initialTask, "Working with tools", state.nSteps, maxSteps, stopAgent)
             SessionBridge.beginScreenWork()
             SessionBridge.awaitScreenReady()
 

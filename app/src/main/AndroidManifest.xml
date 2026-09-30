@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+        Lets the device_state tool report wifi/cellular connectivity through
+        ConnectivityManager. Normal permission; requested at runtime only if it
+        ever becomes dangerous on a future API level.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!--
         Required to mute and restore AudioManager.STREAM_SYSTEM around an open microphone,

@@ -1,5 +1,6 @@
 package com.blurr.voice.triggers
 
+import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -7,6 +8,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+/**
+ * Monitors the notification shade and executes configured notification triggers.
+ *
+ * It also maintains a live snapshot of the currently active notifications so the
+ * agent's `notifications` tool can answer "what notifications do I have?" without
+ * opening the shade and reading the screen. The snapshot is keyed by the system
+ * notification key (package + per-app key), capped to the newest [MAX_SNAPSHOT]
+ * entries, and served from [current], which any component may read. The app's own
+ * foreground notification is deliberately excluded.
+ */
 class DeltaNotificationListenerService : NotificationListenerService() {
 
     private val TAG = "DeltaNotification"
@@ -17,12 +28,38 @@ class DeltaNotificationListenerService : NotificationListenerService() {
         triggerManager = TriggerManager.getInstance(this)
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        current = try {
+            activeNotifications?.toList().orEmpty()
+                .filter { it.packageName != packageName }
+                .sortedByDescending { it.postTime }
+                .take(MAX_SNAPSHOT)
+                .map { it.toSnapshot() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not load active notifications", e)
+            emptyList()
+        }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        // Access was revoked; a stale snapshot would mislead the agent.
+        current = emptyList()
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
 
         val packageName = sbn.packageName
         Log.d(TAG, "Notification posted from package: $packageName")
+
+        if (packageName != this.packageName) {
+            current = (current.filterNot { it.key == sbn.key } + sbn.toSnapshot())
+                .sortedByDescending { it.postTime }
+                .take(MAX_SNAPSHOT)
+        }
 
         if (packageName == this.packageName) {
             Log.d(TAG, "Ignoring notification from own package.")
@@ -57,5 +94,48 @@ class DeltaNotificationListenerService : NotificationListenerService() {
                 sendBroadcast(intent)
             }
         }
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        super.onNotificationRemoved(sbn)
+        if (sbn == null) return
+        current = current.filterNot { it.key == sbn.key }
+    }
+
+    /**
+     * A single active notification, reduced to what the agent actually needs.
+     */
+    data class Snapshot(
+        val key: String,
+        val packageName: String,
+        val title: String,
+        val text: String,
+        val postTime: Long
+    )
+
+    /**
+     * Reduces a [StatusBarNotification] to the fields the agent cares about.
+     */
+    private fun StatusBarNotification.toSnapshot(): Snapshot {
+        val extras = notification.extras
+        return Snapshot(
+            key = key,
+            packageName = packageName,
+            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "(no title)",
+            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.take(240) ?: "",
+            postTime = postTime
+        )
+    }
+
+    companion object {
+        private const val MAX_SNAPSHOT = 30
+
+        /**
+         * The live snapshot of active notifications (newest first), or an empty
+         * list if the listener has not connected yet. Read-only for callers.
+         */
+        @Volatile
+        var current: List<Snapshot> = emptyList()
+            private set
     }
 }

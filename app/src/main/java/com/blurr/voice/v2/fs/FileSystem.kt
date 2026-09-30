@@ -88,8 +88,9 @@ class FileSystem(context: Context, workspaceName: String = "agent_workspace") {
      * Allowed pattern: alphanumeric characters, underscores, and hyphens, ending in .md or .txt.
      */
     private fun isValidFilename(fileName: String): Boolean {
-        // Regex to match safe filenames
-        val pattern = Regex("^[a-zA-Z0-9_-]+\\.(md|txt)$")
+        // Regex to match safe filenames. Kept to plain-text formats so the
+        // agent can always read back what it saved.
+        val pattern = Regex("^[a-zA-Z0-9_-]+\\.(md|txt|json|csv|log)$")
         return fileName.matches(pattern)
     }
 

@@ -1,15 +1,22 @@
 package com.blurr.voice.v2.actions
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
 import com.blurr.voice.ScreenInteractionService
 import com.blurr.voice.api.Finger
 import com.blurr.voice.assistant.SessionBridge
+import com.blurr.voice.triggers.DeltaNotificationListenerService
 import com.blurr.voice.utilities.SpeechCoordinator
 import com.blurr.voice.utilities.UserInputManager
 import com.blurr.voice.overlay.OverlayManager
@@ -485,6 +492,87 @@ class ActionExecutor(private val finger: Finger) {
                     }
                 }
             }
+            // --- Tool-style actions: read and report, never touch the screen ---
+            is Action.Notifications -> {
+                val snapshot = DeltaNotificationListenerService.current
+                if (snapshot.isEmpty()) {
+                    ActionResult(
+                        error = "No notifications are currently active, or notification access " +
+                            "is not granted. If the listener is not enabled, the notifications " +
+                            "tool cannot read other apps' alerts."
+                    )
+                } else {
+                    val formatted = snapshot.take(15).joinToString("\n") { n ->
+                        "#${n.packageName}: ${n.title}. ${n.text}"
+                    }
+                    ActionResult(
+                        longTermMemory = "Read ${snapshot.size} active notification(s).",
+                        extractedContent = formatted,
+                        includeExtractedContentOnlyOnce = true
+                    )
+                }
+            }
+            is Action.ListFiles -> {
+                val listing = fileSystem.describe()
+                ActionResult(
+                    longTermMemory = "Listed the workspace files.",
+                    extractedContent = listing,
+                    includeExtractedContentOnlyOnce = true
+                )
+            }
+            is Action.DeviceState -> {
+                ActionResult(
+                    longTermMemory = "Reported the device state.",
+                    extractedContent = describeDeviceState(context),
+                    includeExtractedContentOnlyOnce = true
+                )
+            }
         }
+    }
+
+    /**
+     * Builds a short, human-readable summary of the device: battery, screen and
+     * network. Everything here is read through public system services -- no
+     * screen, no accessibility -- so this stays a real tool rather than another
+     * excuse to look at the UI.
+     */
+    private fun describeDeviceState(context: Context): String {
+        val batteryIntent = context.registerReceiver(
+            /* receiver = */ null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        )
+        val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val percent = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val screenOn = powerManager.isInteractive
+
+        val connectivityManager =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networkDescription = try {
+            val network = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            when {
+                network == null -> "no connection"
+                capabilities != null &&
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                capabilities != null &&
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular data"
+                else -> "connected"
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read network state", e)
+            "unknown"
+        }
+
+        return buildString {
+            if (percent >= 0) appendLine("Battery: $percent% ${if (charging) "(charging)" else "(not charging)"}")
+            appendLine("Screen: ${if (screenOn) "on" else "off"}")
+            appendLine("Network: $networkDescription")
+        }.trim()
     }
 }
