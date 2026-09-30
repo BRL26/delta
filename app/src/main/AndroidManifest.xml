@@ -354,6 +354,16 @@
             android:name=".TaskLogDetailsActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+
+        <!-- Invisible bridge that surfaces the real unlock screen when a task
+             needs the display but the device is locked. -->
+        <activity
+            android:name=".KeyguardDismissActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 
 </manifest>

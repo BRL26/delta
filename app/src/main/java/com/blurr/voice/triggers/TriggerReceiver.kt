@@ -29,6 +29,7 @@ class TriggerReceiver : BroadcastReceiver() {
 
         if (intent.action == ACTION_EXECUTE_TASK) {
             val taskInstruction = intent.getStringExtra(EXTRA_TASK_INSTRUCTION)
+            Log.d(TAG, "onReceive: action=${intent.action} extras=${intent.extras?.keySet()}")
 
             if (taskInstruction.isNullOrBlank()) {
                 Log.e(TAG, "Received execute task action but instruction was null or empty.")

@@ -8,6 +8,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -49,6 +50,34 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
     private var nativeUtteranceCounter = 0L
 
     var utteranceListener: ((isSpeaking: Boolean) -> Unit)? = null
+
+    // --- Echo guard ---
+    // The recogniser keeps listening while TTS plays, so the assistant's own
+    // voice can land on the microphone and be transcribed as a user turn. The
+    // last utterance we spoke, and when, let callers tell genuine overlap
+    // ("stop", "yes") from echo ("Is there anything else you need?" verbatim).
+    @Volatile
+    private var lastSpokenText: String? = null
+    @Volatile
+    private var lastSpokenAt = 0L
+
+    /**
+     * True when [text] is most likely an echo of our own most recent speech
+     * rather than something the user said: within [windowMillis] of having
+     * spoken and substantially matching it (equal, contained, or sharing a
+     * long prefix). Normalisation is light -- casing, whitespace -- so a
+     * genuinely interrupted user utterance still differs enough to pass.
+     */
+    @Synchronized
+    fun isRecentSpeech(text: String, windowMillis: Long = 10_000L): Boolean {
+        val spoken = lastSpokenText ?: return false
+        if (SystemClock.elapsedRealtime() - lastSpokenAt > windowMillis) return false
+        val a = spoken.trim().lowercase().replace(Regex("\\s+"), " ")
+        val b = text.trim().lowercase().replace(Regex("\\s+"), " ")
+        if (a.isBlank() || b.length < 4) return false
+        return a == b || a.contains(b) || b.contains(a) ||
+            a.startsWith(b) || b.startsWith(a)
+    }
 
     private var isDebugMode: Boolean = try {
         BuildConfig.SPEAK_INSTRUCTIONS
@@ -375,6 +404,13 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
 
     private suspend fun speak(text: String) {
         try {
+            // Record the utterance for the echo guard: this is the single choke
+            // point every spoken line passes through (direct replies, task
+            // completions, follow-ups), so the microphone has everything it needs
+            // to recognise our own voice and drop it.
+            lastSpokenText = text
+            lastSpokenAt = SystemClock.elapsedRealtime()
+
             // No Google key configured means every chunk would throw and get
             // caught below. Go straight to the platform engine instead.
             if (GoogleTts.apiKey.isBlank()) {

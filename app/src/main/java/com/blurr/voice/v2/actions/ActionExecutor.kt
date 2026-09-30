@@ -1,5 +1,6 @@
 package com.blurr.voice.v2.actions
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -10,13 +11,16 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
+import com.blurr.voice.KeyguardDismissActivity
 import com.blurr.voice.ScreenInteractionService
 import com.blurr.voice.api.Finger
 import com.blurr.voice.assistant.SessionBridge
 import com.blurr.voice.triggers.DeltaNotificationListenerService
+import com.blurr.voice.reminders.ReminderScheduler
 import com.blurr.voice.utilities.SpeechCoordinator
 import com.blurr.voice.utilities.UserInputManager
 import com.blurr.voice.overlay.OverlayManager
@@ -31,6 +35,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.system.measureTimeMillis
 import kotlin.text.removePrefix
 
@@ -62,68 +69,82 @@ class ActionExecutor(private val finger: Finger) {
         }
     }
 
-    private fun findPackageNameFromAppName(appName: String, context: Context): String? {
-        val pm = context.packageManager
+    private fun findPackageNameFromAppName(appName: String, context: Context): String? =
+        resolvePackage(appName, context)
 
-        val launchIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
-            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-        val packages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.queryIntentActivities(
-                launchIntent,
-                PackageManager.ResolveInfoFlags.of(0L)
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            pm.queryIntentActivities(launchIntent, 0)
-        }
+    /**
+     * Resolve a user-typed app name to a launchable package, deterministically.
+     *
+     * Lives in the companion so the deterministic "open X" fast path in the
+     * agent can open an app without waiting for the model's first response.
+     * The matching rules deliberately mirror what the model is told to send
+     * (exact label first), and an ambiguous name resolves to nothing so the
+     * caller falls back to the model rather than opening the wrong app.
+     */
+    companion object {
+        fun resolvePackage(appName: String, context: Context): String? {
+            val pm = context.packageManager
 
-        // Build (label -> package) pairs. Only launchable apps are considered,
-        // since those are the only ones open_app can actually start.
-        val candidates = packages.mapNotNull { info ->
-            val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
-            val label = try {
-                info.loadLabel(pm)?.toString()?.trim().orEmpty()
-            } catch (e: Exception) {
-                ""
+            val launchIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+            val packages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(
+                    launchIntent,
+                    PackageManager.ResolveInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(launchIntent, 0)
             }
-            label to pkg
+
+            // Build (label -> package) pairs. Only launchable apps are considered,
+            // since those are the only ones open_app can actually start.
+            val candidates = packages.mapNotNull { info ->
+                val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+                val label = try {
+                    info.loadLabel(pm)?.toString()?.trim().orEmpty()
+                } catch (e: Exception) {
+                    ""
+                }
+                label to pkg
+            }
+
+            val target = appName.trim()
+            if (target.isEmpty()) return null
+
+            // 1. Exact label match (case-insensitive). This is what the model is
+            //    told to send, and it disambiguates things like ChatGPT vs Claude.
+            candidates.firstOrNull { it.first.equals(target, ignoreCase = true) }?.let {
+                return it.second
+            }
+
+            // 2. Exact package name match.
+            candidates.firstOrNull { it.second.equals(target, ignoreCase = true) }?.let {
+                return it.second
+            }
+
+            // 3. Partial label match, but only accept an UNAMBIGUOUS one. The old
+            //    code returned the first hit in arbitrary package order, which is
+            //    how a request for one app could open a different one.
+            val partials = candidates.filter { it.first.contains(target, ignoreCase = true) }
+            if (partials.size == 1) return partials.first().second
+
+            // 4. Partial package-name match.
+            val pkgPartials = candidates.filter { it.second.contains(target, ignoreCase = true) }
+            if (pkgPartials.size == 1) return pkgPartials.first().second
+
+            // 5. Nothing conclusive. Log the realistic options so the model can be
+            //    told to retry with a real name instead of the request failing
+            //    silently and the agent picking some other app.
+            if (partials.size > 1 || pkgPartials.size > 1) {
+                val options = (partials + pkgPartials).map { it.first }.distinct().sorted()
+                Log.w("ActionExecutor", "Ambiguous app name '$appName'. Candidates: $options")
+            } else {
+                Log.w("ActionExecutor", "No installed app matches '$appName'.")
+            }
+
+            return null
         }
-
-        val target = appName.trim()
-        if (target.isEmpty()) return null
-
-        // 1. Exact label match (case-insensitive). This is what the model is
-        //    told to send, and it disambiguates things like ChatGPT vs Claude.
-        candidates.firstOrNull { it.first.equals(target, ignoreCase = true) }?.let {
-            return it.second
-        }
-
-        // 2. Exact package name match.
-        candidates.firstOrNull { it.second.equals(target, ignoreCase = true) }?.let {
-            return it.second
-        }
-
-        // 3. Partial label match, but only accept an UNAMBIGUOUS one. The old
-        //    code returned the first hit in arbitrary package order, which is
-        //    how a request for one app could open a different one.
-        val partials = candidates.filter { it.first.contains(target, ignoreCase = true) }
-        if (partials.size == 1) return partials.first().second
-
-        // 4. Partial package-name match.
-        val pkgPartials = candidates.filter { it.second.contains(target, ignoreCase = true) }
-        if (pkgPartials.size == 1) return pkgPartials.first().second
-
-        // 5. Nothing conclusive. Log the realistic options so the model can be
-        //    told to retry with a real name instead of the request failing
-        //    silently and the agent picking some other app.
-        if (partials.size > 1 || pkgPartials.size > 1) {
-            val options = (partials + pkgPartials).map { it.first }.distinct().sorted()
-            Log.w("ActionExecutor", "Ambiguous app name '$appName'. Candidates: $options")
-        } else {
-            Log.w("ActionExecutor", "No installed app matches '$appName'.")
-        }
-
-        return null
     }
 
     private fun getVisibleText(node: AccessibilityNodeInfo): String {
@@ -527,14 +548,96 @@ class ActionExecutor(private val finger: Finger) {
                     includeExtractedContentOnlyOnce = true
                 )
             }
+            is Action.Reminders -> {
+                val reminders = ReminderScheduler.all(context)
+                    .sortedBy { it.triggerAtMillis }
+                if (reminders.isEmpty()) {
+                    ActionResult(
+                        error = "No reminders are scheduled. Only reminders set through " +
+                            "this assistant are tracked; countdown timers run in the clock " +
+                            "app and cannot be read back."
+                    )
+                } else {
+                    val formatter = SimpleDateFormat("EEE, MMM d 'at' h:mm a", Locale.getDefault())
+                    val formatted = reminders.take(10).joinToString("\n") { r ->
+                        val due = formatter.format(Date(r.triggerAtMillis))
+                        "#${r.id} ${r.label.ifBlank { "Reminder" }} - $due" +
+                            if (r.repeats) " (repeats)" else ""
+                    }
+                    ActionResult(
+                        longTermMemory = "Read ${reminders.size} scheduled reminder(s).",
+                        extractedContent = formatted,
+                        includeExtractedContentOnlyOnce = true
+                    )
+                }
+            }
+            is Action.RequestUnlock -> {
+                val keyguardManager =
+                    context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                if (keyguardManager == null || !keyguardManager.isKeyguardLocked) {
+                    ActionResult(longTermMemory = "The phone is already unlocked.")
+                } else {
+                    // Ask, then surface the real lock screen. The pill doubles as
+                    // the "please unlock" banner; requestDismissKeyguard shows the
+                    // actual PIN / password / fingerprint prompt on top.
+                    OverlayManager.getInstance(context).showAgentStatus(
+                        goal = "Unlock your phone",
+                        activity = "Please unlock to continue",
+                        step = null,
+                        maxSteps = null,
+                        onStop = null
+                    )
+                    Log.d(TAG, "🔓 Keyguard is locked - asking the user to unlock.")
+                    runBlocking {
+                        SpeechCoordinator.getInstance(context)
+                            .speakToUser("I need your screen unlocked to do that. Please unlock your phone.")
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            val intent = Intent(context, KeyguardDismissActivity::class.java).apply {
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                                )
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Could not start the keyguard dismissal activity", e)
+                        }
+                    }
+
+                    // Block this step until the user unlocks (or gives up / a
+                    // timeout passes). Requesting the keyguard dismiss is exactly
+                    // this app's right: holding the overlay permission exempts it
+                    // from background-activity-start restrictions.
+                    val deadline = SystemClock.elapsedRealtime() + 45_000L
+                    while (keyguardManager.isKeyguardLocked &&
+                        SystemClock.elapsedRealtime() < deadline
+                    ) {
+                        delay(500)
+                    }
+
+                    if (keyguardManager.isKeyguardLocked) {
+                        ActionResult(
+                            error = "The phone is still locked - the user did not unlock " +
+                                "within 45 seconds."
+                        )
+                    } else {
+                        ActionResult(
+                            longTermMemory = "User unlocked the phone; continuing the task."
+                        )
+                    }
+                }
+            }
         }
     }
 
     /**
-     * Builds a short, human-readable summary of the device: battery, screen and
-     * network. Everything here is read through public system services -- no
-     * screen, no accessibility -- so this stays a real tool rather than another
-     * excuse to look at the UI.
+     * Builds a short, human-readable summary of the device: current time,
+     * battery, screen, keyguard (lock) state and network. Everything here is
+     * read through public system services -- no screen, no accessibility -- so
+     * this stays a real tool rather than another excuse to look at the UI, and
+     * it works while the phone is locked or the screen is off.
      */
     private fun describeDeviceState(context: Context): String {
         val batteryIntent = context.registerReceiver(
@@ -551,9 +654,12 @@ class ActionExecutor(private val finger: Finger) {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val screenOn = powerManager.isInteractive
 
-        val connectivityManager =
-            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        val locked = keyguardManager?.isKeyguardLocked ?: false
+
         val networkDescription = try {
+            val connectivityManager =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val network = connectivityManager.activeNetwork
             val capabilities = connectivityManager.getNetworkCapabilities(network)
             when {
@@ -570,8 +676,10 @@ class ActionExecutor(private val finger: Finger) {
         }
 
         return buildString {
+            appendLine("Time: ${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())}")
             if (percent >= 0) appendLine("Battery: $percent% ${if (charging) "(charging)" else "(not charging)"}")
             appendLine("Screen: ${if (screenOn) "on" else "off"}")
+            appendLine("Locked: ${if (locked) "yes (lock screen showing)" else "no"}")
             appendLine("Network: $networkDescription")
         }.trim()
     }

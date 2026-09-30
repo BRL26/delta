@@ -46,6 +46,10 @@ sealed class Action {
     data object Notifications : Action()
     data object ListFiles : Action()
     data object DeviceState : Action()
+    data object Reminders : Action()
+    // Asks the user to unlock the phone and waits. Not a screen action itself,
+    // but it gates the screen actions (opening apps, typing) behind the keyguard.
+    data object RequestUnlock : Action()
 
     // --- The Custom Serializer ---
     // This serializer is now data-driven, using the `allSpecs` map as its source of truth.
@@ -245,9 +249,21 @@ sealed class Action {
             ),
             "device_state" to Spec(
                 name = "device_state",
-                description = "Report device state: battery level and charging, screen on/off, and network connectivity (wifi or cellular). Use this instead of navigating to Settings screens.",
+                description = "Report device state: current time, battery level and charging, screen on/off, whether the phone is locked (keyguard showing), and network connectivity (wifi or cellular). Use this instead of navigating to Settings screens.",
                 params = emptyList(),
                 build = { DeviceState }
+            ),
+            "reminders" to Spec(
+                name = "reminders",
+                description = "List the reminders this assistant scheduled (label and when each fires). Countdown timers live in the clock app and are NOT listed here - only reminders set through this assistant.",
+                params = emptyList(),
+                build = { Reminders }
+            ),
+            "request_unlock" to Spec(
+                name = "request_unlock",
+                description = "Ask the user to unlock the phone and wait for them to do it. Shows the real lock screen (PIN / password / fingerprint) and blocks until the phone is unlocked. Use ONLY when a task needs screen access (opening an app, typing, tapping) but device_state reported the phone is locked.",
+                params = emptyList(),
+                build = { RequestUnlock }
             ),
         )
 

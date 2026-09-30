@@ -360,6 +360,19 @@ class ConversationalAgentService : Service() {
                 Log.e("ConvAgent", "STT Error: $error")
                 if (isTextModeActive) return@startListening // Ignore errors in text mode
 
+                // An automation task is running: any recogniser session ending here
+                // (silence timeout, no match, engine hiccup) is the assistant's own
+                // side-channel closing behind the agent, not a failure to understand
+                // the user. Stay quiet instead of announcing "didn't catch that" and
+                // eventually shutting the assistant down. The user's next real
+                // utterance still arrives through onResult untouched.
+                if (AgentService.isRunning) {
+                    Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
+                    visualFeedbackManager.hideTranscription()
+                    deltaStateManager.setState(DeltaState.IDLE)
+                    return@startListening
+                }
+
                 if (error == "No speech match") {
                     Log.d("ConvAgent", "No speech match detected. Silently resetting to IDLE.")
                     visualFeedbackManager.hideTranscription()
@@ -481,7 +494,18 @@ class ConversationalAgentService : Service() {
             onError = { error ->
                 Log.e("ConvAgent", "STT Error: $error")
                 if (isTextModeActive) return@startListening // Ignore errors in text mode
-                
+
+                // Same quiet path as startImmediateListening: while an automation
+                // task is running, a recogniser session that ends on silence or a
+                // hiccup is the side-channel closing, not a user failure. The agent
+                // keeps working untouched; the next real utterance still registers.
+                if (AgentService.isRunning) {
+                    Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
+                    visualFeedbackManager.hideTranscription()
+                    deltaStateManager.setState(DeltaState.IDLE)
+                    return@startListening
+                }
+
                 // Trigger error state in state manager
                 deltaStateManager.triggerErrorState()
                 
@@ -590,6 +614,16 @@ class ConversationalAgentService : Service() {
     @RequiresApi(Build.VERSION_CODES.R)
     private fun processUserInput(userInput: String) {
         serviceScope.launch {
+            // --- Echo guard ---
+            // The recogniser stays open while TTS plays, so our own voice can be
+            // transcribed as a user turn and then answered by the model ("Is there
+            // anything else you need?" -> "No, I'm all set!"). This is the single
+            // funnel every request passes through; drop anything that is
+            // substantially the last thing we spoke, within seconds of saying it.
+            if (ttsManager.isRecentSpeech(userInput)) {
+                Log.d("ConvAgent", "Dropping echo of our own speech: '$userInput'")
+                return@launch
+            }
             // Into the assistant popup's transcript, before anything can fail.
             //
             // Published here rather than at the recogniser or in trackMessage because
@@ -640,7 +674,24 @@ class ConversationalAgentService : Service() {
                 deltaStateManager.setState(DeltaState.PROCESSING)
                 visualFeedbackManager.showThinkingIndicator()
                 val defaultJsonResponse = """{"Type": "Reply", "Reply": "I'm sorry, I had an issue.", "Instruction": "", "Should End": "Continue"}"""
-                val rawModelResponse = getReasoningModelApiResponse(conversationHistory) ?: defaultJsonResponse
+                // A plain "open <app>" request is deterministic: the agent resolves
+                // and launches the app without reading the screen, so the reasoning
+                // model gets no say here. It has misclassified these as small talk
+                // (answering its own previous "Is there anything else you need?"
+                // with "No, I'm all set!"), which leaves the user staring at a
+                // spinner while nothing opens. Bypass its judgment -- and save its
+                // latency -- by synthesising the Task decision directly.
+                val simpleOpen = isSimpleOpenRequest(userInput)
+                val rawModelResponse = if (simpleOpen) {
+                    Log.d("ConvAgent", "Deterministic routing: '$userInput' -> Task (plain app-open).")
+                    val escapedInstruction = userInput
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                    //language=json
+                    """{"Type": "Task", "Reply": "", "Instruction": "$escapedInstruction", "Should End": "Continue"}"""
+                } else {
+                    getReasoningModelApiResponse(conversationHistory) ?: defaultJsonResponse
+                }
                 visualFeedbackManager.hideThinkingIndicator()
                 val decision = parseModelResponse(rawModelResponse)
                 Log.d("TTS_DEBUG", "Reply received from GeminiApi: -->${rawModelResponse}<--")
@@ -889,6 +940,14 @@ class ConversationalAgentService : Service() {
             8. Timers, alarms and reminders are ACTIONS, not conversation. "Set a timer for 5 minutes", "wake me up at 7", "set an alarm for 6:30am" and "remind me to call mum tomorrow at 6" are all "Type": "Task", never "Type": "Reply".
             9. For those, write the "Instruction" as the complete request, keeping the time exactly as the user said it - e.g. "Set a timer for 5 minutes" or "Remind me to call the dentist tomorrow at 6pm". Do NOT convert times to seconds or work out the clock time yourself; the executor schedules these properly.
             10. Confirm briefly in "Reply" (e.g. "Sure, setting a 5 minute timer.") and let the executor do the work. Do not claim it is done until the executor reports back.
+            11. Device-state questions ("what's my battery", "how much battery do I have", "is my wifi on", "is my screen on") are TASKS, not conversation. "Type": "Task", "Instruction": "Report the device state: battery level, charging status, screen, and network."
+            12. Notification questions ("what notifications do I have", "any new messages", "anything new") are TASKS. "Type": "Task", "Instruction": "Read and summarize my current notifications."
+            13. File questions ("what files do I have", "show my notes", "read my todo") are TASKS. "Type": "Task", "Instruction": "Use the file tools to show my files."
+            14. NEVER answer "I can't check that" or "I can't do that" for battery, time, notifications, reminders, device state, files, installed apps, or anything a task agent tool could cover. The executor has tools that read these directly without the screen, so route them as Tasks even when the screen is locked or off.
+            15. Time questions ("what time is it", "what day is it") are conversation: you have the current time above, so answer directly in "Reply". Never say you cannot tell the time.
+            16. Reminder/timer status questions ("what's my next reminder", "what reminders do I have", "check my timer") are TASKS. "Type": "Task", "Instruction": "List my scheduled reminders and when they fire. Note countdown timers run in the clock app and cannot be read back."
+            17. If a task needs the screen (opening an app, typing, tapping) while the phone is locked, the agent will surface the real unlock screen itself and wait for the user - route it as a normal Task and DO NOT refuse or ask the user to unlock first.
+            18. If the user asks to open an app you do not see in the <installed_apps> list below, still route it as a Task with the app's exact name: that list can be truncated and only the task agent can confirm an app is truly missing.
             
             Use these memories to answer the user's question with his personal data
             ### Memory Context Start ###
@@ -914,7 +973,8 @@ class ConversationalAgentService : Service() {
             - "Reply": The text to speak to the user. This is a confirmation for a "Task", or the direct answer for a "Reply".
             - "Instruction": The task agent's GOAL, restated in plain natural language (e.g. "Open the ChatGPT app", "Search for pizza places near me and tell me the top result"). This field should be an empty string "" if the "Type" is not "Task".
               - CRITICAL: Write the WHAT, never the HOW. Do NOT describe taps, swipes, coordinates, or element indexes, and do NOT copy UI actions out of the screen context above (e.g. "tap element [10]" is WRONG). The task agent has its own eyes and will work out the steps itself.
-              - If the user names an app, use the app's exact name from the <installed_apps> list. If it is not in that list, say so in "Reply" instead of inventing a substitute.
+              - If the user names an app, use the app's exact name from the <installed_apps> list when it is present there.
+              - NEVER decide in this layer that an app is missing: the <installed_apps> list can be truncated, and only the task agent (which checks the full package list) can confirm an app truly cannot be opened. Route app requests as "Task" with the app's name even when it is not listed; if the task agent reports the app cannot be opened, tell the user at that point.
             - "Should End": Must be either "Continue" or "Finished". Use "Finished" only when the conversation is naturally over.
         
             Current Time : {time_context}
@@ -924,7 +984,7 @@ class ConversationalAgentService : Service() {
         // gets, otherwise it cannot tell whether a requested app exists and
         // substitutes a different one. Appended to the same message so the
         // history is not reset.
-        val installedApps = com.blurr.voice.v2.InstalledAppsCatalog.describeForPrompt(this, maxEntries = 80)
+        val installedApps = com.blurr.voice.v2.InstalledAppsCatalog.describeForPrompt(this, maxEntries = 250)
         val finalPrompt = if (installedApps.isNotBlank()) {
             "$systemPrompt\n\n$installedApps"
         } else {
@@ -1057,6 +1117,32 @@ class ConversationalAgentService : Service() {
             emptyList()
         }
     }
+    /**
+     * True when the user's request is only about opening a single app and nothing
+     * more ("open camera", "launch whatsapp"). Such requests are routed to the
+     * agent deterministically, skipping the reasoning model entirely -- it has
+     * repeatedly misclassified them as small talk, and the agent can resolve and
+     * launch the app on its own in milliseconds. Must stay in lockstep with
+     * [com.blurr.voice.v2.Agent.isSimpleOpenRequest], which makes the same
+     * cut on its side.
+     */
+    private fun isSimpleOpenRequest(request: String): Boolean {
+        val lowered = request.trim().lowercase()
+        val rest = Regex("^\\s*(?:open|launch|start|open up|take me to)\\s+(.+)$")
+            .find(lowered)?.groupValues?.get(1)?.trim() ?: return false
+        if (rest.isBlank()) return false
+        val words = rest.split(Regex("\\s+")).filter {
+            it.isNotBlank() && it != "the" && it != "app" && it != "application"
+        }
+        if (words.size > 3) return false
+        val actionHints = setOf(
+            "and", "then", "take", "send", "record", "capture", "snap", "show",
+            "check", "find", "search", "play", "set", "list", "read", "write",
+            "call", "message", "text", "with", "after", "before", "stop"
+        )
+        return words.none { it in actionHints }
+    }
+
     private fun parseModelResponse(response: String): ModelDecision {
         try {
             // Models often wrap JSON in ```json fences or add prose around it.

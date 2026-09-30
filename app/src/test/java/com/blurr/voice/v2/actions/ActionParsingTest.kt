@@ -22,6 +22,8 @@ class ActionParsingTest {
         assertEquals(Action.Notifications, parse("""{"notifications": {}}"""))
         assertEquals(Action.ListFiles, parse("""{"list_files": {}}"""))
         assertEquals(Action.DeviceState, parse("""{"device_state": {}}"""))
+        assertEquals(Action.Reminders, parse("""{"reminders": {}}"""))
+        assertEquals(Action.RequestUnlock, parse("""{"request_unlock": {}}"""))
     }
 
     @Test
@@ -40,6 +42,8 @@ class ActionParsingTest {
         assertTrue("notifications spec missing", names.contains("notifications"))
         assertTrue("list_files spec missing", names.contains("list_files"))
         assertTrue("device_state spec missing", names.contains("device_state"))
+        assertTrue("reminders spec missing", names.contains("reminders"))
+        assertTrue("request_unlock spec missing", names.contains("request_unlock"))
     }
 
     private fun parse(json: String): Action = Json.decodeFromString(Action.serializer(), json)

@@ -23,7 +23,6 @@ object InstalledAppsCatalog {
 
     /** Apps we never want to suggest opening. */
     private val BLOCKED_PACKAGES = setOf(
-        "com.android.settings",
         "com.android.systemui",
         "com.android.shell",
         "com.android.providers.settings",
@@ -86,10 +85,13 @@ object InstalledAppsCatalog {
     }
 
     /**
-     * Renders the catalog for the system prompt. Kept compact - the prompt is
-     * resent on every step, so a huge list would burn tokens for no benefit.
+     * Renders the catalog for the system prompt. The default cap covers any
+     * realistic phone (250 launchers); on bigger builds the trailing apps are
+     * still exceeded by the "may be truncated" caveat below, which tells the
+     * model to attempt open_app anyway rather than declaring an app missing
+     * just because it was not listed.
      */
-    fun describeForPrompt(context: Context, maxEntries: Int = 120): String {
+    fun describeForPrompt(context: Context, maxEntries: Int = 250): String {
         val apps = getLaunchableApps(context)
         if (apps.isEmpty()) return ""
 
@@ -99,6 +101,11 @@ object InstalledAppsCatalog {
             append("These apps are installed and can be opened at any time with the ")
             append("\"open_app\" action, regardless of whether they are visible on the ")
             append("current screen. Use the exact label shown here.\n")
+            append("NOTE: on devices with many apps this list is truncated, so an app ")
+            append("missing here is NOT proof it is absent. If the user names an app you ")
+            append("do not see listed, still call \"open_app\" with the user's name - it ")
+            append("verifies against the full package list and reports honestly if the ")
+            append("app truly cannot be opened.\n")
             shown.forEach { app ->
                 append("- ${app.label} (${app.packageName})\n")
             }
