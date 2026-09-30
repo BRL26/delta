@@ -150,6 +150,14 @@ android {
         viewBinding = true
         buildConfig = true
     }
+    testOptions {
+        unitTests {
+            // Pure-logic helpers log on their failure paths, and a stubbed
+            // android.util.Log throws instead of returning a default, which
+            // turns a passing assertion into an error about the logging.
+            isReturnDefaultValues = true
+        }
+    }
 }
 val libsuVersion = "6.0.0"
 

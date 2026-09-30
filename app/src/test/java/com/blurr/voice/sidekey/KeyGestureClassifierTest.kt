@@ -120,6 +120,57 @@ class KeyGestureClassifierTest {
         assertEquals(KeyGesture.SINGLE_PRESS, result.value)
     }
 
+    /**
+     * Adaptive timing: a long press resolves from its own timer while the key is
+     * down, so it cannot be confused with a released tap. Mapping one alongside
+     * a single press must therefore not make the single press wait.
+     */
+    @Test
+    fun `single press stays instant when a long press is also mapped`() {
+        val clock = FakeScheduler()
+        val result = Box<KeyGesture>()
+        val c = classifier(
+            setOf(KeyGesture.SINGLE_PRESS, KeyGesture.LONG_PRESS), clock, result
+        )
+
+        c.onKeyDown(0)
+        c.onKeyUp(0, 50)
+        assertEquals(KeyGesture.SINGLE_PRESS, result.value)
+    }
+
+    @Test
+    fun `a held press still resolves as a long press when a single press is mapped`() {
+        val clock = FakeScheduler()
+        val result = Box<KeyGesture>()
+        val c = classifier(
+            setOf(KeyGesture.SINGLE_PRESS, KeyGesture.LONG_PRESS), clock, result
+        )
+
+        c.onKeyDown(0)
+        clock.advance(KeyGestureClassifier.LONG_PRESS_THRESHOLD_MS)
+        assertEquals(KeyGesture.LONG_PRESS, result.value)
+
+        c.onKeyUp(0, 700)
+        assertEquals(KeyGesture.LONG_PRESS, result.value) // the release adds nothing
+    }
+
+    /**
+     * The classifier classifies the key, it does not decide what runs: with
+     * nothing mapped it still resolves a single press immediately, and the
+     * mapper is what turns that into a no-op. Waiting here would add latency
+     * for every press to buy nothing.
+     */
+    @Test
+    fun `an unmapped single press still classifies immediately`() {
+        val clock = FakeScheduler()
+        val result = Box<KeyGesture>()
+        val c = classifier(emptySet(), clock, result)
+
+        c.onKeyDown(0)
+        c.onKeyUp(0, 50)
+        assertEquals(KeyGesture.SINGLE_PRESS, result.value)
+    }
+
     @Test
     fun `reset clears a pending double`() {
         val clock = FakeScheduler()

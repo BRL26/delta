@@ -203,4 +203,50 @@ class ReminderTimeParserTest {
         val r = Reminder(id = 1, label = "x", triggerAtMillis = tuesday10am, repeatDays = emptySet())
         assertNull(ReminderScheduler.nextOccurrence(r, tuesday10am))
     }
+
+    // Weekdays, which is how calendar and booking screens usually state a date.
+
+    @Test
+    fun `a bare weekday resolves forward with its clock time`() {
+        // From Tuesday, "fri 3pm" is this coming Friday.
+        assertEquals(at(0, 15, 0, 2, 10), ReminderTimeParser.parse("fri 3pm", tuesday10am))
+    }
+
+    @Test
+    fun `a bare weekday without a time defaults to nine in the morning`() {
+        // From Tuesday, "thursday" is the Thursday coming, at 9am.
+        assertEquals(at(0, 9, 0, 1, 10), ReminderTimeParser.parse("thursday", tuesday10am))
+    }
+
+    @Test
+    fun `a weekday later today still resolves to today when the time is ahead`() {
+        val result = ReminderTimeParser.parse("tuesday 6pm", tuesday10am)
+        assertEquals(at(0, 18, 0, 29, 9), result)
+    }
+
+    @Test
+    fun `a weekday whose time has passed rolls to next week`() {
+        val result = ReminderTimeParser.parse("tuesday 9am", tuesday10am)
+        assertEquals(at(0, 9, 0, 6, 10), result)
+    }
+
+    @Test
+    fun `next friday on a friday means the week after`() {
+        val friday10am = at(0, 10, 0, 2, 10)
+        val result = ReminderTimeParser.parse("next friday 3pm", friday10am)
+        assertEquals(at(0, 15, 0, 9, 10), result)
+    }
+
+    @Test
+    fun `a calendar date still beats a weekday`() {
+        // "Oct 9" is a date even though a weekday is also nearby.
+        assertEquals(at(0, 14, 0, 9, 10), ReminderTimeParser.parse("oct 9 at 2pm", tuesday10am))
+    }
+
+    @Test
+    fun `a weekday inside a longer word is not a date`() {
+        // "monsoon" contains "mon", "sunshine" contains "sun"; neither is a day.
+        assertNull(ReminderTimeParser.parse("monsoon", tuesday10am))
+        assertNull(ReminderTimeParser.parse("sunshine hours", tuesday10am))
+    }
 }

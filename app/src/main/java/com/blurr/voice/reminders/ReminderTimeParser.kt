@@ -66,6 +66,12 @@ object ReminderTimeParser {
         RegexOption.IGNORE_CASE
     )
 
+    /** "friday", "fri", "next tue" -- a weekday with no date attached. */
+    private val WEEKDAY_RE = Regex(
+        """\b(${DAY_NAMES.keys.sortedByDescending { it.length }.joinToString("|")})\b""",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * @return epoch millis, or null if the text contains no usable time.
      */
@@ -82,6 +88,10 @@ object ReminderTimeParser {
         // An explicit calendar date beats a bare clock reading: "oct 9 at 2pm"
         // must land on 9 October, not on the next 2pm.
         parseMonthDate(text, from)?.let { return it }
+
+        // A bare weekday is the next common way a screen states a date
+        // ("Fri 3pm", "Tuesday"), so it resolves before the clock reading.
+        parseWeekday(text, from)?.let { return it }
 
         // Otherwise a clock reading beats a bare number. "at 6pm" contains a 6,
         // and without this check it would be read as six minutes from now.
@@ -130,6 +140,46 @@ object ReminderTimeParser {
         }
 
         if (cal.timeInMillis < from) cal.add(Calendar.YEAR, 1)
+        return cal.timeInMillis
+    }
+
+    /**
+     * Resolves a bare weekday to its next occurrence, at the clock reading in
+     * the phrase if there is one, otherwise 9:00 AM. "fri 3pm" on a Wednesday
+     * means this Friday at 3pm; on a Friday after 3pm it means the following
+     * Friday, because the moment has already passed today. "next friday" skips
+     * a week when today *is* that Friday, which is how people use the word.
+     */
+    private fun parseWeekday(text: String, from: Long): Long? {
+        val m = WEEKDAY_RE.find(text) ?: return null
+        val target = DAY_NAMES[m.groupValues[1].lowercase(Locale.US)] ?: return null
+
+        val cal = Calendar.getInstance().apply { timeInMillis = from }
+        val today = cal.get(Calendar.DAY_OF_WEEK)
+        var daysAhead = (target - today + 7) % 7
+        val saysNext = text.contains("next")
+        if (daysAhead == 0 && saysNext) daysAhead = 7
+
+        cal.add(Calendar.DAY_OF_YEAR, daysAhead)
+        cal.set(Calendar.HOUR_OF_DAY, 9)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+
+        // A clock reading after the weekday overrides the 9:00 default.
+        CLOCK_RE.find(text, m.range.last + 1)?.let { c ->
+            var hour = c.groupValues[1].toIntOrNull() ?: return@let
+            val minute = c.groupValues[2].toIntOrNull() ?: 0
+            val meridiem = c.groupValues[3].lowercase(Locale.US)
+            if (meridiem == "pm" && hour in 1..11) hour += 12
+            if (meridiem == "am" && hour == 12) hour = 0
+            if (hour in 0..23 && minute in 0..59) {
+                cal.set(Calendar.HOUR_OF_DAY, hour)
+                cal.set(Calendar.MINUTE, minute)
+            }
+        }
+
+        if (cal.timeInMillis < from) cal.add(Calendar.WEEK_OF_YEAR, 1)
         return cal.timeInMillis
     }
 

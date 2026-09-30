@@ -36,10 +36,11 @@ import com.blurr.voice.sidekey.HandlerGestureScheduler
 import com.blurr.voice.sidekey.KeyGesture
 import com.blurr.voice.sidekey.KeyGestureClassifier
 import com.blurr.voice.sidekey.ObservedKeyEvent
-import com.blurr.voice.sidekey.SideKeyAction
 import com.blurr.voice.sidekey.SideKeyEventFilter
 import com.blurr.voice.sidekey.SideKeyEventStream
-import com.blurr.voice.sidekey.SnapAnalyzer
+import com.blurr.voice.sidekey.SideKeyActionExecutor
+import com.blurr.voice.sidekey.SideKeyActionRegistry
+import com.blurr.voice.sidekey.SideKeyNotifications
 import com.blurr.voice.utilities.TTSManager
 import com.blurr.voice.utilities.TtsVisualizer
 import kotlinx.coroutines.CoroutineScope
@@ -85,6 +86,9 @@ class ScreenInteractionService : AccessibilityService() {
         const val DEBUG_SHOW_TAPS = true
 
         const val DEBUG_SHOW_BOUNDING_BOXES = false
+
+        /** How far above the bottom edge the synthesised gesture-bar press lands. */
+        private const val GESTURE_BAR_INSET_DP = 6f
     }
 
     private var windowManager: WindowManager? = null
@@ -185,14 +189,56 @@ class ScreenInteractionService : AccessibilityService() {
 
     private fun onKeyGestureClassified(gesture: KeyGesture) {
         SideKeyEventStream.publishGesture(gesture)
-        if (EssentialKeyMapper.isEnabled(this)) {
-            when (EssentialKeyMapper.actionFor(this, gesture)) {
-                SideKeyAction.NONE -> Unit
-                SideKeyAction.SNAP_AND_SCHEDULE -> keyScope.launch {
-                    SnapAnalyzer.snapAndSchedule(applicationContext, this@ScreenInteractionService)
-                }
+        if (!EssentialKeyMapper.isEnabled(this)) return
+        val action = EssentialKeyMapper.actionFor(this, gesture)
+        if (action.id == SideKeyActionRegistry.NONE_ID) return
+        Log.i("SideKey", "$gesture -> ${action.id}")
+        // Run off the accessibility thread: an action may screenshot, write
+        // files, or start an activity, none of which may stall key handling.
+        keyScope.launch {
+            val ok = SideKeyActionExecutor.execute(this@ScreenInteractionService, action)
+            if (!ok) {
+                SideKeyNotifications.notify(
+                    applicationContext,
+                    "Side key did not run",
+                    "${action.label} could not be started."
+                )
             }
         }
+    }
+
+    /**
+     * Synthesises the home-indicator long press that the system uses to open
+     * Circle to Search, since the overlay itself is not startable by an intent.
+     *
+     * @param holdMs how long to hold; the real gesture is around 500ms.
+     * @return true when the platform accepted the gesture, which says nothing
+     *   about whether the overlay appeared -- the caller verifies that.
+     */
+    fun dispatchGestureBarLongPress(holdMs: Long): Boolean {
+        val metrics = resources.displayMetrics
+        val x = metrics.widthPixels / 2f
+        // The bar itself is a thin strip at the very bottom; aim a few pixels up
+        // from the edge so the press lands on it rather than off-screen.
+        val y = metrics.heightPixels - (metrics.density * GESTURE_BAR_INSET_DP)
+        val path = android.graphics.Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, holdMs))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
+    /**
+     * @return the packages owning every window the service can currently see,
+     *   used to tell whether a search overlay actually came up. Read off each
+     *   window's root node, since [AccessibilityWindowInfo] itself has no
+     *   package accessor.
+     */
+    fun visibleWindowPackages(): List<String> = try {
+        windows.mapNotNull { window -> window.root?.packageName?.toString() }
+    } catch (t: Throwable) {
+        Log.w("InteractionService", "Could not read the window list", t)
+        emptyList()
     }
     /**
      * Gets the package name of the app currently in the foreground.

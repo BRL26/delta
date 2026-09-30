@@ -3,26 +3,19 @@ package com.blurr.voice.sidekey
 import android.content.Context
 import android.view.KeyEvent
 
-/** What a single Essential Key gesture is allowed to trigger. */
-enum class SideKeyAction {
-    /** Nothing; the gesture is intentionally unused. */
-    NONE,
-
-    /**
-     * Snap the screen, analyse it in the background for anything worth being
-     * reminded about, schedule what is found, and notify with a summary.
-     */
-    SNAP_AND_SCHEDULE
-}
-
 /**
  * The Essential Key's configuration: whether the integration is on, which
- * scanCode identifies the key, and which gesture maps to which [SideKeyAction].
+ * scanCode identifies the key, and which gesture maps to which action.
  *
  * Nothing OS publishes the key as `keyCode=0` with Linux `scanCode=250` on
  * verified devices. The scanCode can be re-learned on the Key Test screen; the
  * default matches every Nothing build seen so far, and a press whose scanCode
  * differs is simply ignored rather than misfiring.
+ *
+ * Mappings are stored as [SideKeyActionSpec.id] strings under one key per
+ * gesture, so a press can be pointed at any action in
+ * [SideKeyActionRegistry] and an id that is later removed reads back as
+ * [SideKeyActionRegistry.NONE_ID] instead of failing.
  */
 object EssentialKeyMapper {
 
@@ -57,22 +50,35 @@ object EssentialKeyMapper {
         prefs(context).edit().putInt(KEY_SCAN_CODE, scanCode).apply()
     }
 
-    /** The action mapped to [gesture], or [SideKeyAction.NONE] when unused. */
-    fun actionFor(context: Context, gesture: KeyGesture): SideKeyAction = when (gesture) {
-        // v1 maps only the single press: snap + auto-schedule. The double,
-        // triple, and long presses stay free for the user's next round of
-        // functionality; NONE keeps them from firing anything today.
-        KeyGesture.SINGLE_PRESS -> SideKeyAction.SNAP_AND_SCHEDULE
-        else -> SideKeyAction.NONE
+    /** The prefs key holding [gesture]'s action id. */
+    private fun keyFor(gesture: KeyGesture): String = "side_key_action_${gesture.name.lowercase()}"
+
+    /** The raw action id stored for [gesture], or null when never set. */
+    fun actionIdFor(context: Context, gesture: KeyGesture): String? =
+        prefs(context).getString(keyFor(gesture), null)
+
+    /** Assigns [actionId] to [gesture]; anything unrecognised stores as "do nothing". */
+    fun setActionIdFor(context: Context, gesture: KeyGesture, actionId: String) {
+        val known = SideKeyActionRegistry.actions.firstOrNull { it.id == actionId }
+        val stored = known?.id ?: SideKeyActionRegistry.NONE_ID
+        prefs(context).edit().putString(keyFor(gesture), stored).apply()
     }
+
+    /** The action mapped to [gesture], or "do nothing" when unmapped. */
+    fun actionFor(context: Context, gesture: KeyGesture): SideKeyActionSpec =
+        SideKeyActionRegistry.specFor(actionIdFor(context, gesture))
 
     /**
      * Only the gestures with a real mapping need recognising. Passing the
-     * resulting set to the classifier lets it resolve the single press
-     * immediately instead of waiting out the multi-tap window.
+     * resulting set to the classifier is what makes timing adaptive: a lone
+     * single-press mapping resolves the instant the key comes up, and adding a
+     * double or triple mapping is enough to make the classifier wait out the
+     * multi-tap window so both still work.
      */
     fun gesturesToRecognize(context: Context): Set<KeyGesture> =
-        KeyGesture.entries.filter { actionFor(context, it) != SideKeyAction.NONE }.toSet()
+        KeyGesture.entries
+            .filter { actionIdFor(context, it) != null && actionIdFor(context, it) != SideKeyActionRegistry.NONE_ID }
+            .toSet()
 }
 
 /** Pure filter decisions for candidate key events, extracted for unit tests. */

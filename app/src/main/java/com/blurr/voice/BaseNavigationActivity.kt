@@ -12,7 +12,7 @@ abstract class BaseNavigationActivity : AppCompatActivity() {
     protected abstract fun getCurrentNavItem(): NavItem
 
     enum class NavItem {
-        HOME, TRIGGERS, MOMENTS, SNAPS, UPGRADE, SETTINGS
+        HOME, TRIGGERS, MOMENTS, UPGRADE, SETTINGS
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,15 +50,6 @@ abstract class BaseNavigationActivity : AppCompatActivity() {
                 }
             }
             alpha = if (currentItem == NavItem.MOMENTS) 1.0f else 0.7f
-        }
-
-        findViewById<LinearLayout>(R.id.nav_snaps).apply {
-            setOnClickListener {
-                if (currentItem != NavItem.SNAPS) {
-                    navigateToActivity(SnapsActivity::class.java, currentItem)
-                }
-            }
-            alpha = if (currentItem == NavItem.SNAPS) 1.0f else 0.7f
         }
         
         findViewById<LinearLayout>(R.id.nav_home).apply {

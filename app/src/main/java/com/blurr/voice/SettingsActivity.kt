@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.blurr.voice.api.GoogleTts
 import com.blurr.voice.api.TTSVoice
 import com.blurr.voice.sidekey.EssentialKeyMapper
+import android.view.LayoutInflater
 import com.blurr.voice.utilities.AuthGate
 import com.blurr.voice.utilities.SpeechCoordinator
 import com.blurr.voice.utilities.VoicePreferenceManager
@@ -40,6 +41,7 @@ class SettingsActivity : BaseNavigationActivity() {
     private lateinit var switchSideKeyEnabled: com.google.android.material.switchmaterial.SwitchMaterial
     private lateinit var sideKeyStatusText: TextView
     private lateinit var sideKeyTestButton: TextView
+    private lateinit var sideKeyPressRows: android.widget.LinearLayout
     private lateinit var permissionsInfoButton: TextView
     private lateinit var batteryOptimizationHelpButton: TextView
     private lateinit var appVersionText: TextView
@@ -91,6 +93,7 @@ class SettingsActivity : BaseNavigationActivity() {
         switchSideKeyEnabled = findViewById(R.id.switchSideKeyEnabled)
         sideKeyStatusText = findViewById(R.id.sideKeyStatusText)
         sideKeyTestButton = findViewById(R.id.sideKeyTestButton)
+        sideKeyPressRows = findViewById(R.id.sideKeyPressRows)
         permissionsInfoButton = findViewById(R.id.permissionsInfoButton)
         appVersionText = findViewById(R.id.appVersionText)
         batteryOptimizationHelpButton = findViewById(R.id.batteryOptimizationHelpButton)
@@ -148,6 +151,8 @@ class SettingsActivity : BaseNavigationActivity() {
         sideKeyTestButton.setOnClickListener {
             startActivity(Intent(this, com.blurr.voice.sidekey.SideKeyTestActivity::class.java))
         }
+
+        buildSideKeyPressRows()
     }
 
     private fun setupAutoSavingListeners() {
@@ -240,6 +245,7 @@ class SettingsActivity : BaseNavigationActivity() {
         switchShowThoughts.isChecked = sharedPreferences.getBoolean(KEY_SHOW_THOUGHTS, false)
         switchSideKeyEnabled.isChecked = EssentialKeyMapper.isEnabled(this)
         updateSideKeyStatus()
+        refreshSideKeyPressRows()
     }
 
     /** Explains what the side key will do, given its enabled state and whether
@@ -249,8 +255,8 @@ class SettingsActivity : BaseNavigationActivity() {
         val enabled = EssentialKeyMapper.isEnabled(this)
         val connected = ScreenInteractionService.instance != null
         sideKeyStatusText.text = when {
-            !enabled -> "Off. Turn it on and a single press snaps the screen."
-            connected -> "On — single press snaps the screen, schedules reminders, and notifies."
+            !enabled -> "Off. Turn it on to use your mapped press actions."
+            connected -> "On. Each press runs whatever you mapped it to."
             else -> "On, but the accessibility service is not connected. Enable Delta in Android's Accessibility settings."
         }
     }
@@ -330,4 +336,33 @@ class SettingsActivity : BaseNavigationActivity() {
     override fun getContentLayoutId(): Int = R.layout.activity_settings
     
     override fun getCurrentNavItem(): BaseNavigationActivity.NavItem = BaseNavigationActivity.NavItem.SETTINGS
+
+    /**
+     * One tappable row per press type, built from [SideKeyActionPicker.pressOrder]
+     * so a new press type appears without touching the settings layout. Each row
+     * shows the press on the left and the action it currently runs on the right,
+     * and opens the picker for that press.
+     */
+    private fun buildSideKeyPressRows() {
+        val inflater = LayoutInflater.from(this)
+        sideKeyPressRows.removeAllViews()
+        for ((gesture, label) in SideKeyActionPicker.pressOrder) {
+            val row = inflater.inflate(R.layout.item_side_key_press, sideKeyPressRows, false)
+            row.findViewById<TextView>(R.id.pressLabel).text = label
+            row.setOnClickListener {
+                SideKeyActionPicker.show(this, gesture) { refreshSideKeyPressRows() }
+            }
+            sideKeyPressRows.addView(row)
+        }
+        refreshSideKeyPressRows()
+    }
+
+    /** Re-reads the stored mappings into the press rows. */
+    private fun refreshSideKeyPressRows() {
+        for ((index, pair) in SideKeyActionPicker.pressOrder.withIndex()) {
+            val row = sideKeyPressRows.getChildAt(index) ?: continue
+            val action = EssentialKeyMapper.actionFor(this, pair.first)
+            row.findViewById<TextView>(R.id.pressValue).text = action.label
+        }
+    }
 }
