@@ -44,6 +44,28 @@ object ReminderTimeParser {
         "sunday" to Calendar.SUNDAY, "sun" to Calendar.SUNDAY
     )
 
+    /** Month name or 3-letter abbreviation to Calendar month. */
+    private val MONTH_NAMES = mapOf(
+        "january" to 1, "jan" to 1,
+        "february" to 2, "feb" to 2,
+        "march" to 3, "mar" to 3,
+        "april" to 4, "apr" to 4,
+        "may" to 5,
+        "june" to 6, "jun" to 6,
+        "july" to 7, "jul" to 7,
+        "august" to 8, "aug" to 8,
+        "september" to 9, "sept" to 9, "sep" to 9,
+        "october" to 10, "oct" to 10,
+        "november" to 11, "nov" to 11,
+        "december" to 12, "dec" to 12
+    )
+
+    /** "oct 9", "October 9th", "march 12" -- month word followed by a day. */
+    private val MONTH_DATE_RE = Regex(
+        """\b(${MONTH_NAMES.keys.joinToString("|")})\s+(\d{1,2})(?:st|nd|rd|th)?\b""",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * @return epoch millis, or null if the text contains no usable time.
      */
@@ -57,6 +79,10 @@ object ReminderTimeParser {
             parseDuration(text)?.let { return from + it * 1000L }
         }
 
+        // An explicit calendar date beats a bare clock reading: "oct 9 at 2pm"
+        // must land on 9 October, not on the next 2pm.
+        parseMonthDate(text, from)?.let { return it }
+
         // Otherwise a clock reading beats a bare number. "at 6pm" contains a 6,
         // and without this check it would be read as six minutes from now.
         if (looksLikeClock(text)) return parseClock(text, from)
@@ -65,6 +91,46 @@ object ReminderTimeParser {
         // actually say it ("in 10").
         parseDuration(text)?.let { return from + it * 1000L }
         return null
+    }
+
+    /**
+     * Parses an explicit month-and-day phrase ("oct 9", "december 25th"). A
+     * clock reading following the date ("oct 9 at 2pm") overrides the default
+     * reminder time, which is 9:00 AM -- the point being to catch the date
+     * rather than guess at a time the screen never showed. A date already past
+     * this year rolls to the same date next year.
+     */
+    private fun parseMonthDate(text: String, from: Long): Long? {
+        val m = MONTH_DATE_RE.find(text) ?: return null
+        val month = MONTH_NAMES[m.groupValues[1].lowercase(Locale.US)] ?: return null
+        val day = m.groupValues[2].toIntOrNull() ?: return null
+        if (day !in 1..31) return null
+
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = from
+            set(Calendar.MONTH, month - 1)
+            set(Calendar.DAY_OF_MONTH, day)
+            set(Calendar.HOUR_OF_DAY, 9)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        // Search after the date so "oct 9 at 2pm" reads the 2pm, not the 9.
+        CLOCK_RE.find(text, m.range.last + 1)?.let { c ->
+            var hour = c.groupValues[1].toIntOrNull() ?: return@let
+            val minute = c.groupValues[2].toIntOrNull() ?: 0
+            val meridiem = c.groupValues[3].lowercase(Locale.US)
+            if (meridiem == "pm" && hour in 1..11) hour += 12
+            if (meridiem == "am" && hour == 12) hour = 0
+            if (hour in 0..23 && minute in 0..59) {
+                cal.set(Calendar.HOUR_OF_DAY, hour)
+                cal.set(Calendar.MINUTE, minute)
+            }
+        }
+
+        if (cal.timeInMillis < from) cal.add(Calendar.YEAR, 1)
+        return cal.timeInMillis
     }
 
     private fun looksLikeClock(text: String): Boolean {

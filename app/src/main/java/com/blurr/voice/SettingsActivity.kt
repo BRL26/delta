@@ -21,6 +21,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import com.blurr.voice.api.GoogleTts
 import com.blurr.voice.api.TTSVoice
+import com.blurr.voice.sidekey.EssentialKeyMapper
 import com.blurr.voice.utilities.AuthGate
 import com.blurr.voice.utilities.SpeechCoordinator
 import com.blurr.voice.utilities.VoicePreferenceManager
@@ -36,6 +37,9 @@ class SettingsActivity : BaseNavigationActivity() {
 
     private lateinit var ttsVoicePicker: NumberPicker
     private lateinit var switchShowThoughts: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var switchSideKeyEnabled: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var sideKeyStatusText: TextView
+    private lateinit var sideKeyTestButton: TextView
     private lateinit var permissionsInfoButton: TextView
     private lateinit var batteryOptimizationHelpButton: TextView
     private lateinit var appVersionText: TextView
@@ -84,6 +88,9 @@ class SettingsActivity : BaseNavigationActivity() {
     private fun setupUI() {
         ttsVoicePicker = findViewById(R.id.ttsVoicePicker)
         switchShowThoughts = findViewById(R.id.switchShowThoughts)
+        switchSideKeyEnabled = findViewById(R.id.switchSideKeyEnabled)
+        sideKeyStatusText = findViewById(R.id.sideKeyStatusText)
+        sideKeyTestButton = findViewById(R.id.sideKeyTestButton)
         permissionsInfoButton = findViewById(R.id.permissionsInfoButton)
         appVersionText = findViewById(R.id.appVersionText)
         batteryOptimizationHelpButton = findViewById(R.id.batteryOptimizationHelpButton)
@@ -137,6 +144,10 @@ class SettingsActivity : BaseNavigationActivity() {
         findViewById<View>(R.id.aiProvidersButton).setOnClickListener {
             startActivity(Intent(this, AiProvidersActivity::class.java))
         }
+
+        sideKeyTestButton.setOnClickListener {
+            startActivity(Intent(this, com.blurr.voice.sidekey.SideKeyTestActivity::class.java))
+        }
     }
 
     private fun setupAutoSavingListeners() {
@@ -164,6 +175,11 @@ class SettingsActivity : BaseNavigationActivity() {
 
         switchShowThoughts.setOnCheckedChangeListener { _, isChecked ->
             sharedPreferences.edit().putBoolean(KEY_SHOW_THOUGHTS, isChecked).apply()
+        }
+
+        switchSideKeyEnabled.setOnCheckedChangeListener { _, isChecked ->
+            EssentialKeyMapper.setEnabled(this, isChecked)
+            updateSideKeyStatus()
         }
     }
 
@@ -222,6 +238,21 @@ class SettingsActivity : BaseNavigationActivity() {
         ttsVoicePicker.value = availableVoices.indexOf(savedVoice)
 
         switchShowThoughts.isChecked = sharedPreferences.getBoolean(KEY_SHOW_THOUGHTS, false)
+        switchSideKeyEnabled.isChecked = EssentialKeyMapper.isEnabled(this)
+        updateSideKeyStatus()
+    }
+
+    /** Explains what the side key will do, given its enabled state and whether
+     *  the accessibility service is actually connected (without it, key events
+     *  never reach Delta). */
+    private fun updateSideKeyStatus() {
+        val enabled = EssentialKeyMapper.isEnabled(this)
+        val connected = ScreenInteractionService.instance != null
+        sideKeyStatusText.text = when {
+            !enabled -> "Off. Turn it on and a single press snaps the screen."
+            connected -> "On — single press snaps the screen, schedules reminders, and notifies."
+            else -> "On, but the accessibility service is not connected. Enable Delta in Android's Accessibility settings."
+        }
     }
 
     private fun saveSelectedVoice(voice: TTSVoice) {

@@ -21,6 +21,7 @@ import android.util.Log
 import android.util.Xml
 import android.view.Display
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -30,10 +31,23 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import com.blurr.voice.sidekey.EssentialKeyMapper
+import com.blurr.voice.sidekey.HandlerGestureScheduler
+import com.blurr.voice.sidekey.KeyGesture
+import com.blurr.voice.sidekey.KeyGestureClassifier
+import com.blurr.voice.sidekey.ObservedKeyEvent
+import com.blurr.voice.sidekey.SideKeyAction
+import com.blurr.voice.sidekey.SideKeyEventFilter
+import com.blurr.voice.sidekey.SideKeyEventStream
+import com.blurr.voice.sidekey.SnapAnalyzer
 import com.blurr.voice.utilities.TTSManager
 import com.blurr.voice.utilities.TtsVisualizer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
@@ -84,6 +98,17 @@ class ScreenInteractionService : AccessibilityService() {
 
     private var currentActivityName: String? = null
 
+    // --- Essential Key --------------------------------------------------------
+    // The side key arrives as keyCode=0 / scanCode=250 and is only observable
+    // through the accessibility service's key-event filter (the exact approach
+    // proven by KoukeNeko/EssentialKeyTools). Events are classified on the main
+    // handler; the resulting gesture is executed on [keyScope] so a snap never
+    // blocks the accessibility thread.
+    private val keyHandler = Handler(Looper.getMainLooper())
+    private val keyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var keyClassifier: KeyGestureClassifier? = null
+    private var keyClassifierGestures: Set<KeyGesture>? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -92,6 +117,82 @@ class ScreenInteractionService : AccessibilityService() {
 //        setupGlowEffect()
 //        setupAudioWaveEffect()
 //        setupWaveBorderEffect()
+    }
+
+    /**
+     * The Nothing Essential Key enters the input pipeline as keyCode=0 with
+     * Linux scanCode=250, which the public key-layout files leave unmapped; an
+     * accessibility service with flagRequestFilterKeyEvents can still observe
+     * it here. Returns true for the matched key so nothing downstream misfires
+     * on it.
+     */
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        // Key Test screen active: record every learnable event and recognise
+        // every gesture of the key itself so the user can verify each one,
+        // whether or not it is mapped yet. Never execute an action, and never
+        // consume. Other keys (power, home) still surface as raw events so a
+        // wrong scanCode is visible, but they never classify.
+        if (SideKeyEventStream.testModeActive) {
+            if (SideKeyEventFilter.isLearnableCandidate(event.keyCode)) {
+                publishKeyEvent(event)
+                if (SideKeyEventFilter.matchesKey(
+                        event.scanCode, EssentialKeyMapper.learnedScanCode(this)
+                    )
+                ) {
+                    feedKeyClassifier(event, KeyGesture.entries.toSet())
+                }
+            }
+            return false
+        }
+
+        if (!EssentialKeyMapper.isEnabled(this)) return false
+        if (!SideKeyEventFilter.matchesKey(event.scanCode, EssentialKeyMapper.learnedScanCode(this))) {
+            return false
+        }
+        feedKeyClassifier(event, EssentialKeyMapper.gesturesToRecognize(this))
+        return true
+    }
+
+    private fun publishKeyEvent(event: KeyEvent) {
+        SideKeyEventStream.publishEvent(
+            ObservedKeyEvent(
+                keyCode = event.keyCode,
+                scanCode = event.scanCode,
+                action = event.action,
+                timestampMs = event.eventTime
+            )
+        )
+    }
+
+    private fun feedKeyClassifier(event: KeyEvent, enabledGestures: Set<KeyGesture>) {
+        // Only the gestures with a real mapping need recognising, so the single
+        // press resolves immediately. Rebuild only when that set changes (the
+        // Key Test screen needs every gesture; normal operation needs one).
+        if (keyClassifier == null || keyClassifierGestures != enabledGestures) {
+            keyClassifier?.reset()
+            keyClassifier = KeyGestureClassifier(
+                enabledGestures = enabledGestures,
+                scheduler = HandlerGestureScheduler(keyHandler),
+                onGesture = ::onKeyGestureClassified
+            )
+            keyClassifierGestures = enabledGestures
+        }
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> keyClassifier?.onKeyDown(event.downTime)
+            KeyEvent.ACTION_UP -> keyClassifier?.onKeyUp(event.downTime, event.eventTime)
+        }
+    }
+
+    private fun onKeyGestureClassified(gesture: KeyGesture) {
+        SideKeyEventStream.publishGesture(gesture)
+        if (EssentialKeyMapper.isEnabled(this)) {
+            when (EssentialKeyMapper.actionFor(this, gesture)) {
+                SideKeyAction.NONE -> Unit
+                SideKeyAction.SNAP_AND_SCHEDULE -> keyScope.launch {
+                    SnapAnalyzer.snapAndSchedule(applicationContext, this@ScreenInteractionService)
+                }
+            }
+        }
     }
     /**
      * Gets the package name of the app currently in the foreground.
@@ -612,12 +713,17 @@ class ScreenInteractionService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.e("InteractionService", "Accessibility Service interrupted.")
+        keyClassifier?.reset()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         instance = null
         hideGlowingBorder()
+        keyClassifier?.reset()
+        keyClassifier = null
+        keyHandler.removeCallbacksAndMessages(null)
+        keyScope.cancel()
         Log.d("InteractionService", "Accessibility Service destroyed.")
     }
 

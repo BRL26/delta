@@ -76,6 +76,33 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- Snaps -->
+        <LinearLayout
+            android:id="@+id/nav_snaps"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/ic_snap"
+                android:tint="#FFFFFF" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Snaps"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
         <!-- Home (Delta) -->
         <LinearLayout
             android:id="@+id/nav_home"
@@ -95,8 +122,8 @@
 
         </LinearLayout>
 
-        <!-- "Buy Pro" nav item: removed in this fork. The remaining items keep
-             their layout_weight="1", so they redistribute evenly across the bar. -->
+        <!-- The former "Buy Pro" slot stays empty in this fork; the remaining items
+             share the bar evenly. -->
 
         <!-- Settings -->
         <LinearLayout

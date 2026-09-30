@@ -355,6 +355,24 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <!-- Side-key snap history: every captured screenshot and its analysis. -->
+        <activity
+            android:name=".SnapsActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".SnapsDetailActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Live Essential Key gesture test: records raw key events and the
+             recognised gesture without running the mapped action. -->
+        <activity
+            android:name=".sidekey.SideKeyTestActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Delta" />
+
         <!-- Invisible bridge that surfaces the real unlock screen when a task
              needs the display but the device is locked. -->
         <activity

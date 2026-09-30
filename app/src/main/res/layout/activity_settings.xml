@@ -210,6 +210,75 @@
 
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/rounded_background"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Side Key (Essential Key)"
+                android:textColor="@color/white"
+                android:textSize="18sp"
+                android:fontFamily="@font/playfair_display"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="12dp"
+                android:text="Nothing phones only. Turns the side key into a snap-then-think shortcut."
+                android:textColor="#888888"
+                android:textSize="14sp" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchSideKeyEnabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Enable side-key snaps"
+                android:textColor="@color/white"
+                android:textSize="16sp"
+                android:fontFamily="@font/oxanium"
+                app:thumbTint="@color/accent"
+                app:trackTint="#555555" />
+
+            <TextView
+                android:id="@+id/sideKeyStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="#888888"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/sideKeyTestButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/rounded_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:padding="12dp"
+                android:text="@string/side_key_test"
+                android:textColor="@android:color/black"
+                android:textSize="16sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/side_key_info"
+                android:textColor="#888888"
+                android:textSize="12sp" />
+
+        </LinearLayout>
+
         <TextView
             android:id="@+id/permissionsInfoButton"
             android:layout_width="wrap_content"

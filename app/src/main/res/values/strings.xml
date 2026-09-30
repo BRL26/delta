@@ -151,4 +151,13 @@
     <string name="assistant_stay_collapsed">Keep as a bubble</string>
     <string name="assistant_stay_collapsed_on">Keep as a bubble (on)</string>
     <string name="assistant_collapse_away">Put the assistant away</string>
+
+    <!-- Side Key (Essential Key) settings. -->
+    <string name="side_key_test">Test the key</string>
+    <string name="side_key_info">Single press snaps the screen, analyses it in the
+        background, schedules reminders, and notifies you what it set.\n\nNothing OS
+        reserves the single press for Essential Space. To free it, disable Essential
+        Space and Recorder with: adb shell pm disable-user --user 0
+        com.nothing.ntessentialspace — and the same for
+        com.nothing.ntessentialrecorder. Restore them anytime with pm enable.</string>
 </resources>

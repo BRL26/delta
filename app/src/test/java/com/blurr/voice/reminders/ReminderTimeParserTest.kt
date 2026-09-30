@@ -103,6 +103,42 @@ class ReminderTimeParserTest {
     }
 
     @Test
+    fun `explicit calendar date with clock`() {
+        // 29 September 2026 -> 9 October at 2pm.
+        assertEquals(
+            at(0, 14, 0, 9, 10),
+            ReminderTimeParser.parse("oct 9 at 2pm", tuesday10am)
+        )
+    }
+
+    @Test
+    fun `explicit calendar date without a clock defaults to 9am`() {
+        assertEquals(
+            at(0, 9, 0, 9, 10),
+            ReminderTimeParser.parse("october 9th", tuesday10am)
+        )
+    }
+
+    @Test
+    fun `calendar date rolls to next year once past`() {
+        // 29 Sep 2026 -> Jan 15 has already gone this year, so 2027.
+        val expected = Calendar.getInstance().apply {
+            clear()
+            set(2027, 0, 15, 9, 0, 0)
+        }.timeInMillis
+        assertEquals(expected, ReminderTimeParser.parse("jan 15", tuesday10am))
+    }
+
+    @Test
+    fun `calendar date still wins over a clock in the phrase`() {
+        // Day number and clock both present: the date pins the day.
+        assertEquals(
+            at(0, 18, 30, 25, 12),
+            ReminderTimeParser.parse("dec 25 at 6:30pm", tuesday10am)
+        )
+    }
+
+    @Test
     fun `garbage yields null`() {
         assertNull(ReminderTimeParser.parse("whenever I feel like it", tuesday10am))
     }
