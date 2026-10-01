@@ -6,37 +6,41 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.util.Log
-import android.view.View
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
-import androidx.appcompat.app.AlertDialog
-import androidx.core.content.ContextCompat
+import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.android.billingclient.api.*
 import com.blurr.voice.assistant.AssistantRoleService
-import com.blurr.voice.v2.AgentService
+import com.blurr.voice.ui.app.DeltaDestination
+import com.blurr.voice.ui.app.DeltaNav
+import com.blurr.voice.ui.home.EXAMPLES
+import com.blurr.voice.ui.home.HomeScreen
+import com.blurr.voice.ui.home.HomeUiState
+import com.blurr.voice.ui.theme.BlurrTheme
 import com.blurr.voice.utilities.AuthGate
+import com.blurr.voice.utilities.DeltaState
+import com.blurr.voice.utilities.DeltaStateColorMapper
+import com.blurr.voice.utilities.DeltaStateManager
 import com.blurr.voice.utilities.FreemiumManager
 import com.blurr.voice.utilities.Logger
 import com.blurr.voice.utilities.OnboardingManager
 import com.blurr.voice.utilities.PermissionManager
 import com.blurr.voice.utilities.UserIdManager
 import com.blurr.voice.utilities.UserProfileManager
-import com.blurr.voice.utilities.DeltaState
-import com.blurr.voice.utilities.DeltaStateManager
-import com.blurr.voice.utilities.DeltaStateColorMapper
-import com.blurr.voice.views.DeltaSymbolView
+import com.blurr.voice.v2.AgentService
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -44,60 +48,55 @@ import com.google.firebase.firestore.firestore
 import com.google.firebase.remoteconfig.remoteConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
-import java.io.File
+import kotlinx.coroutines.withContext
 
-class MainActivity : BaseNavigationActivity() {
+/**
+ * The launcher, and the app's home screen.
+ *
+ * The screen itself is [HomeScreen]; this class is the auth gate, the subscription
+ * check, the assistant-state listener and the owner of the [HomeUiState] the screen
+ * draws. Nothing here touches a `View`.
+ *
+ * That split is the point of the rewrite. The old version found eleven different
+ * widgets by id, toggled their `visibility` from six places and set two of them to
+ * `View.GONE` at once, and had its own `Color.parseColor("#4CAF50")` for the
+ * permission line -- which is why the home screen was the only orange page in the
+ * app. Here every one of those is a field on the state.
+ */
+class MainActivity : AppCompatActivity() {
 
-    private lateinit var handler: Handler
-    private lateinit var managePermissionsButton: TextView
-    private lateinit var tvPermissionStatus: TextView
     private lateinit var userId: String
     private lateinit var permissionManager: PermissionManager
     private lateinit var auth: FirebaseAuth
-    private lateinit var tasksLeftTag: View
     private lateinit var freemiumManager: FreemiumManager
-    private lateinit var increaseLimitsLink: TextView
     private lateinit var onboardingManager: OnboardingManager
     private lateinit var requestRoleLauncher: ActivityResultLauncher<Intent>
-    private lateinit var statusTextView: TextView
-    private lateinit var loadingOverlay: View
     private lateinit var deltaStateManager: DeltaStateManager
     private lateinit var stateChangeListener: (DeltaState) -> Unit
-    private lateinit var permissionsTag: View
-    private lateinit var permissionsStatusTag: TextView
-    private lateinit var tasksLeftText: TextView
-    private lateinit var deltaSymbol: DeltaSymbolView
 
-
-    private lateinit var root: View
-    companion object {
-        const val ACTION_PURCHASE_UPDATED = "com.blurr.voice.PURCHASE_UPDATED"
-    }
+    /** Everything [HomeScreen] draws. Written only through the helpers below. */
+    private var ui by mutableStateOf(
+        HomeUiState(
+            deltaState = DeltaState.IDLE,
+            statusText = "Ready",
+            loading = true,
+            permissionsGranted = false,
+            isDefaultAssistant = false,
+            tasksLeft = null,
+            developerMessage = null,
+        ),
+    )
 
     private val purchaseUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ACTION_PURCHASE_UPDATED) {
-                Logger.d("MainActivity", "Received purchase update broadcast.")
-                // Refresh billing status
-                showLoading(true)
+                Logger.d(TAG, "Received purchase update broadcast.")
+                ui = ui.copy(loading = true)
                 performBillingCheck()
             }
         }
     }
-
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
-            if (isGranted) {
-                Toast.makeText(this, "Permission granted!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Permission denied.", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-
-
 
     @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,7 +118,7 @@ class MainActivity : BaseNavigationActivity() {
         }
         onboardingManager = OnboardingManager(this)
         if (!onboardingManager.isOnboardingCompleted()) {
-            Logger.d("MainActivity", "User is logged in but onboarding not completed. Relaunching permissions stepper.")
+            Logger.d(TAG, "User is logged in but onboarding not completed. Relaunching permissions stepper.")
             startActivity(Intent(this, OnboardingPermissionsActivity::class.java))
             finish()
             return
@@ -130,44 +129,46 @@ class MainActivity : BaseNavigationActivity() {
                 Toast.makeText(this, "Set as default assistant successfully!", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Couldn’t become default assistant. Opening settings…", Toast.LENGTH_SHORT).show()
-                Logger.w("MainActivity", "Role request canceled or app not eligible.\n${explainAssistantEligibility()}")
+                Logger.w(TAG, "Role request canceled or app not eligible.\n${explainAssistantEligibility()}")
                 openAssistantPickerSettings()
             }
-            showAssistantStatus(true)
+            showAssistantStatus(toast = false)
         }
 
-
-        setContentView(R.layout.activity_main_content)
-        findViewById<TextView>(R.id.btn_set_default_assistant).setOnClickListener {
-            startActivity(Intent(this, RoleRequestActivity::class.java))
+        enableEdgeToEdge()
+        setContent {
+            BlurrTheme {
+                HomeScreen(
+                    state = ui,
+                    onNavigate = { DeltaNav.navigate(this, it) },
+                    onDeltaTap = { startConversationalAgent() },
+                    onSetAssistantClick = {
+                        startActivity(Intent(this, RoleRequestActivity::class.java))
+                    },
+                    onManagePermissionsClick = {
+                        startActivity(Intent(this, PermissionsActivity::class.java))
+                    },
+                    onEmailDeveloperClick = { requestLimitIncrease() },
+                    onDisclaimerClick = { ui = ui.copy(disclaimerOpen = true) },
+                    onExamplesClick = { ui = ui.copy(examplesOpen = true) },
+                    onDeveloperMessageDismiss = { dismissDeveloperMessage() },
+                    onDisclaimerDismiss = { ui = ui.copy(disclaimerOpen = false) },
+                    onExamplesDismiss = { ui = ui.copy(examplesOpen = false) },
+                    onExampleChosen = { example -> runExample(example) },
+                )
+            }
         }
-        updateDefaultAssistantButtonVisibility()
 
         handleIntent(intent)
-        managePermissionsButton = findViewById(R.id.btn_manage_permissions) // ADDED
 
-        val userIdManager = UserIdManager(applicationContext)
-        userId = userIdManager.getOrCreateUserId()
-        increaseLimitsLink = findViewById(R.id.increase_limits_link) // ADDED
+        userId = UserIdManager(applicationContext).getOrCreateUserId()
 
         permissionManager = PermissionManager(this)
         permissionManager.initializePermissionLauncher()
 
-        managePermissionsButton = findViewById(R.id.btn_manage_permissions)
-        tasksLeftText = findViewById(R.id.tasks_left_tag_text)
-        tasksLeftTag = findViewById(R.id.tasks_left_tag)
-        tvPermissionStatus = findViewById(R.id.tv_permission_status)
-        statusTextView = findViewById(R.id.status_text)
-        loadingOverlay = findViewById(R.id.loading_overlay)
-        permissionsTag = findViewById(R.id.permissions_tag)
-        permissionsStatusTag = findViewById(R.id.permissions_status_tag)
-        deltaSymbol = findViewById(R.id.delta_symbol)
         freemiumManager = FreemiumManager()
-        updateStatusText(DeltaState.IDLE)
         initializeDeltaStateManager()
-        handler = Handler(Looper.getMainLooper())
-        setupClickListeners()
-        showLoading(true)
+        ui = ui.copy(isDefaultAssistant = isThisAppDefaultAssistant())
         performBillingCheck()
     }
 
@@ -191,7 +192,7 @@ class MainActivity : BaseNavigationActivity() {
         val held = rm?.isRoleHeld(RoleManager.ROLE_ASSISTANT) == true
         val msg = if (held) "This app is the default assistant." else "This app is NOT the default assistant."
         if (toast) Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-        Logger.d("MainActivity", msg)
+        Logger.d(TAG, msg)
     }
 
     private fun explainAssistantEligibility(): String {
@@ -219,14 +220,14 @@ class MainActivity : BaseNavigationActivity() {
             finish()
             return
         }
-        
-        showLoading(true)
+
+        ui = ui.copy(loading = true)
         performBillingCheck()
     }
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == "com.blurr.voice.WAKE_UP_DELTA") {
-            Logger.d("MainActivity", "Wake up Delta shortcut activated!")
+            Logger.d(TAG, "Wake up Delta shortcut activated!")
             startConversationalAgent()
         }
     }
@@ -250,34 +251,6 @@ class MainActivity : BaseNavigationActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
-    }
-
-    override fun getContentLayoutId(): Int = R.layout.activity_main_content
-    
-    override fun getCurrentNavItem(): BaseNavigationActivity.NavItem = BaseNavigationActivity.NavItem.HOME
-
-    private fun setupClickListeners() {
-        managePermissionsButton.setOnClickListener {
-            startActivity(Intent(this, PermissionsActivity::class.java))
-        }
-        increaseLimitsLink.setOnClickListener {
-            requestLimitIncrease()
-        }
-
-        findViewById<TextView>(R.id.disclaimer_link).setOnClickListener {
-            showDisclaimerDialog()
-        }
-        findViewById<TextView>(R.id.examples_link).setOnClickListener {
-            showExamplesDialog()
-        }
-        
-        // Add click listener to delta symbol
-        deltaSymbol.setOnClickListener {
-            // Only start conversational agent if in ready/idle state
-            if (deltaStateManager.getCurrentState() == DeltaState.IDLE || deltaStateManager.getCurrentState() == DeltaState.ERROR) {
-                startConversationalAgent()
-            }
-        }
     }
 
     private fun requestLimitIncrease() {
@@ -306,9 +279,13 @@ class MainActivity : BaseNavigationActivity() {
         }
     }
 
-
-    // Pro upgrade banner: removed in this fork. There is no subscription UI, so
-    // there is nothing to advertise and nothing to wire up.
+    /** Starts the agent on [example], with the old fork's easter egg for the last row. */
+    private fun runExample(example: String) {
+        ui = ui.copy(examplesOpen = false)
+        val instruction =
+            if (example == EXAMPLES.last()) "play never gonna give you up on youtube" else example
+        AgentService.start(this, instruction)
+    }
 
     /**
      * Initialize DeltaStateManager and set up state change listeners
@@ -317,34 +294,23 @@ class MainActivity : BaseNavigationActivity() {
         deltaStateManager = DeltaStateManager.getInstance(this)
         stateChangeListener = { newState ->
             updateStatusText(newState)
-
-            updateDeltaVisuals(newState)
-            Logger.d("MainActivity", "Delta state changed to: ${newState.name}")
+            ui = ui.copy(deltaState = newState)
+            Logger.d(TAG, "Delta state changed to: ${newState.name}")
         }
         deltaStateManager.addStateChangeListener(stateChangeListener)
     }
-    private fun updateDeltaVisuals(state: DeltaState) {
-        runOnUiThread {
-            // Get the color for the current state
-            val color = DeltaStateColorMapper.getColor(this, state)
-            deltaSymbol.setColor(color)
 
-            // Start or stop the glow based on whether the state is "active"
-            if (DeltaStateColorMapper.isActiveState(state)) {
-                deltaSymbol.startGlow()
-            } else {
-                deltaSymbol.stopGlow()
-            }
-        }
-    }
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onResume() {
         super.onResume()
-        showLoading(true)
+        ui = ui.copy(
+            loading = true,
+            isDefaultAssistant = isThisAppDefaultAssistant(),
+        )
         performBillingCheck()
         displayDeveloperMessage()
-        updateDeltaVisuals(deltaStateManager.getCurrentState())
-        updateUI()
+        ui = ui.copy(deltaState = deltaStateManager.getCurrentState())
+        updatePermissionState()
         deltaStateManager.startMonitoring()
         val purchaseFilter = IntentFilter(ACTION_PURCHASE_UPDATED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -360,7 +326,7 @@ class MainActivity : BaseNavigationActivity() {
         try {
             unregisterReceiver(purchaseUpdateReceiver)
         } catch (e: IllegalArgumentException) {
-            Logger.d("MainActivity", "Receivers were not registered")
+            Logger.d(TAG, "Receivers were not registered")
         }
     }
 
@@ -372,83 +338,18 @@ class MainActivity : BaseNavigationActivity() {
         }
     }
 
-    private fun showDisclaimerDialog() {
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Disclaimer")
-            .setMessage("Delta is an experimental AI assistant and is still in development. It may not always be accurate or perform as expected. It does small task better. Your understanding is appreciated!")
-            .setPositiveButton("Okay") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(
-            ContextCompat.getColor(this, R.color.white)
-        )
-    }
-
-    private fun showExamplesDialog() {
-        val examples = arrayOf(
-            "Open YouTube and play music",
-            "Send a text message",
-            "Set an alarm for 30 minutes",
-            "Open camera app",
-            "Check weather forecast",
-            "Open calculator",
-            "Surprise me"
-        )
-        
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Example Commands")
-            .setItems(examples) { _, which ->
-                val selectedExample = examples[which]
-                if (selectedExample == "Surprise me"){
-                    AgentService.start(this, "play never gonna give you up on youtube")
-
-                }
-                AgentService.start(this, selectedExample)
-            }
-            .setNegativeButton("Cancel") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .show()
-        
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(
-            ContextCompat.getColor(this, R.color.black)
-        )
-    }
-
-
     private fun updateTaskCounter() {
         lifecycleScope.launch {
             val isUserSub = freemiumManager.isUserSubscribed()
-            if(isUserSub){
-                tasksLeftTag.visibility = View.GONE
-            }
-            val tasksLeft = freemiumManager.getTasksRemaining()
-            tasksLeftText.text = "$tasksLeft tasks left"
+            // A subscriber has no counter to show, and "0 tasks left" would be a
+            // lie about a limit they are not on.
+            ui = ui.copy(tasksLeft = if (isUserSub) null else freemiumManager.getTasksRemaining())
         }
     }
 
-    // Subscription status UI removed in this fork. FreemiumManager is still
-    // consulted elsewhere (task limits), but nothing is shown to the user and
-    // there is no upsell, so this is a no-op.
-    private fun updateBillingStatus() {
-        Logger.d("MainActivity", "updateBillingStatus: no subscription UI in this build")
-    }
-
-    @SuppressLint("SetTextI18n")
-    private fun updateUI() {
-        val allPermissionsGranted = permissionManager.areAllPermissionsGranted()
-        if (allPermissionsGranted) {
-            tvPermissionStatus.text = "All required permissions are granted."
-            tvPermissionStatus.visibility = View.GONE
-            managePermissionsButton.visibility = View.GONE
-            tvPermissionStatus.setTextColor(Color.parseColor("#4CAF50")) // Green
-            permissionsTag.visibility = View.VISIBLE
-        } else {
-            tvPermissionStatus.text = "Some permissions are missing. Tap below to manage."
-            tvPermissionStatus.setTextColor(Color.parseColor("#F44336")) // Red
-            permissionsTag.visibility = View.GONE
-        }
+    /** Refreshes whether Delta has everything it needs, and says so on the screen. */
+    private fun updatePermissionState() {
+        ui = ui.copy(permissionsGranted = permissionManager.areAllPermissionsGranted())
     }
 
     private fun isThisAppDefaultAssistant(): Boolean {
@@ -462,29 +363,16 @@ class MainActivity : BaseNavigationActivity() {
         }
     }
 
-    private fun updateDefaultAssistantButtonVisibility() {
-        val btn = findViewById<TextView>(R.id.btn_set_default_assistant)
-        btn.visibility = if (isThisAppDefaultAssistant()) View.GONE else View.VISIBLE
-    }
-
-    private fun showLoading(show: Boolean) {
-        loadingOverlay.visibility = if (show) View.VISIBLE else View.GONE
-    }
-
     private fun performBillingCheck() {
         lifecycleScope.launch {
             try {
                 waitForBillingClientReady()
                 queryAndHandlePurchases()
-                updateTaskCounter()
-                updateBillingStatus()
-                
             } catch (e: Exception) {
-                Logger.e("MainActivity", "Error during billing check", e)
-                updateTaskCounter()
-                updateBillingStatus()
+                Logger.e(TAG, "Error during billing check", e)
             } finally {
-                showLoading(false)
+                updateTaskCounter()
+                ui = ui.copy(loading = false)
             }
         }
     }
@@ -493,14 +381,14 @@ class MainActivity : BaseNavigationActivity() {
         return withContext(Dispatchers.IO) {
             var attempts = 0
             val maxAttempts = 10
-            
+
             while (!MyApplication.isBillingClientReady.value && attempts < maxAttempts) {
                 kotlinx.coroutines.delay(500)
                 attempts++
             }
-            
+
             if (!MyApplication.isBillingClientReady.value) {
-                Logger.w("MainActivity", "Billing client not ready after waiting")
+                Logger.w(TAG, "Billing client not ready after waiting")
             }
         }
     }
@@ -508,7 +396,7 @@ class MainActivity : BaseNavigationActivity() {
     private suspend fun queryAndHandlePurchases() {
         return withContext(Dispatchers.IO) {
             if (!MyApplication.isBillingClientReady.value) {
-                Logger.e("MainActivity", "queryPurchases: BillingClient is not ready")
+                Logger.e(TAG, "queryPurchases: BillingClient is not ready")
                 return@withContext
             }
 
@@ -516,35 +404,35 @@ class MainActivity : BaseNavigationActivity() {
                 val params = QueryPurchasesParams.newBuilder()
                     .setProductType(BillingClient.ProductType.SUBS)
                     .build()
-                
-                Logger.d("MainActivity", "queryPurchases: BillingClient is ready")
+
+                Logger.d(TAG, "queryPurchases: BillingClient is ready")
 
                 val purchasesResult = MyApplication.billingClient.queryPurchasesAsync(params)
                 val billingResult = purchasesResult.billingResult
-                
-                Logger.d("MainActivity", "queryPurchases: Got billing result: ${billingResult.responseCode}")
+
+                Logger.d(TAG, "queryPurchases: Got billing result: ${billingResult.responseCode}")
 
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                    Logger.d("MainActivity", "queryPurchases: Found ${purchasesResult.purchasesList.size} purchases")
+                    Logger.d(TAG, "queryPurchases: Found ${purchasesResult.purchasesList.size} purchases")
                     purchasesResult.purchasesList.forEach { purchase ->
                         when (purchase.purchaseState) {
                             Purchase.PurchaseState.PURCHASED -> {
-                                Logger.d("MainActivity", "Found purchased item: ${purchase.products}")
+                                Logger.d(TAG, "Found purchased item: ${purchase.products}")
                                 handlePurchase(purchase)
                             }
                             Purchase.PurchaseState.PENDING -> {
-                                Logger.d("MainActivity", "Purchase is pending")
+                                Logger.d(TAG, "Purchase is pending")
                             }
                             else -> {
-                                Logger.d("MainActivity", "Purchase is not in a valid state: ${purchase.purchaseState}")
+                                Logger.d(TAG, "Purchase is not in a valid state: ${purchase.purchaseState}")
                             }
                         }
                     }
                 } else {
-                    Logger.e("MainActivity", "Failed to query purchases: ${billingResult.debugMessage}")
+                    Logger.e(TAG, "Failed to query purchases: ${billingResult.debugMessage}")
                 }
             } catch (e: Exception) {
-                Logger.e("MainActivity", "Exception during purchase query", e)
+                Logger.e(TAG, "Exception during purchase query", e)
             }
         }
     }
@@ -557,15 +445,15 @@ class MainActivity : BaseNavigationActivity() {
                         val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder()
                             .setPurchaseToken(purchase.purchaseToken)
                             .build()
-                        
+
                         MyApplication.billingClient.acknowledgePurchase(acknowledgePurchaseParams) { billingResult ->
                             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                                Logger.d("MainActivity", "Purchase acknowledged: ${purchase.orderId}")
+                                Logger.d(TAG, "Purchase acknowledged: ${purchase.orderId}")
                                 lifecycleScope.launch {
                                     updateUserToPro()
                                 }
                             } else {
-                                Logger.e("MainActivity", "Failed to acknowledge purchase: ${billingResult.debugMessage}")
+                                Logger.e(TAG, "Failed to acknowledge purchase: ${billingResult.debugMessage}")
                             }
                         }
                     } else {
@@ -573,7 +461,7 @@ class MainActivity : BaseNavigationActivity() {
                     }
                 }
             } catch (e: Exception) {
-                Logger.e("MainActivity", "Error handling purchase", e)
+                Logger.e(TAG, "Error handling purchase", e)
             }
         }
     }
@@ -582,9 +470,7 @@ class MainActivity : BaseNavigationActivity() {
     private suspend fun updateUserToPro() {
         val uid = AuthGate.currentUid(this)
         if (uid == null) {
-            Logger.e("MainActivity", "Cannot update user to pro: user is not authenticated.")
-            withContext(Dispatchers.Main) {
-            }
+            Logger.e(TAG, "Cannot update user to pro: user is not authenticated.")
             return
         }
 
@@ -593,117 +479,67 @@ class MainActivity : BaseNavigationActivity() {
             try {
                 val userDocRef = db.collection("users").document(uid)
                 userDocRef.update("plan", "pro").await()
-                Logger.d("MainActivity", "Successfully updated user $uid to 'pro' plan.")
-                withContext(Dispatchers.Main) {
-                }
-
+                Logger.d(TAG, "Successfully updated user $uid to 'pro' plan.")
             } catch (e: Exception) {
-                Logger.e("MainActivity", "Error updating user to pro", e)
-                withContext(Dispatchers.Main) {
-                }
+                Logger.e(TAG, "Error updating user to pro", e)
             }
         }
     }
 
+    /**
+     * Fetches a one-off message from Remote Config and shows it, at most once.
+     */
     private fun displayDeveloperMessage() {
-        //lifecycleScope.launch {
-            try {
-                // Check if message has been shown more than once
-                val sharedPrefs = getSharedPreferences("developer_message_prefs", Context.MODE_PRIVATE)
-                val displayCount = sharedPrefs.getInt("developer_message_count", 0)
-                
-                if (displayCount >= 1) {
-                    Logger.d("MainActivity", "Developer message already shown $displayCount times, skipping display")
-                    return
-                }
+        try {
+            val sharedPrefs = getSharedPreferences("developer_message_prefs", Context.MODE_PRIVATE)
+            val displayCount = sharedPrefs.getInt("developer_message_count", 0)
 
-                val remoteConfig = Firebase.remoteConfig
-
-                // Fetch and activate the latest Remote Config values
-                remoteConfig.fetchAndActivate()
-                    .addOnCompleteListener(this) { task ->
-                        if (task.isSuccessful) {
-                            val updated = task.result
-                            Log.d("MainActivity", "Remote Config params updated: $updated")
-
-                            // Get the message from the activated config
-                            val message = remoteConfig.getString("developerMessage")
-
-                            if (message.isNotEmpty()) {
-                                // Your existing dialog logic
-                                val dialog = AlertDialog.Builder(this@MainActivity)
-                                    .setTitle("Message from Developer")
-                                    .setMessage(message)
-                                    .setPositiveButton("OK") { dialogInterface, _ ->
-                                        dialogInterface.dismiss()
-                                        val editor = sharedPrefs.edit()
-                                        editor.putInt("developer_message_count", displayCount + 1)
-                                        editor.apply()
-                                    }
-                                    .show()
-                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(
-                                    ContextCompat.getColor(this@MainActivity, R.color.black)
-                                )
-                                Log.d("MainActivity", "Developer message displayed from Remote Config.")
-                            } else {
-                                Log.d("MainActivity", "No developer message found in Remote Config.")
-                            }
-                        } else {
-                            Log.e("MainActivity", "Failed to fetch Remote Config.", task.exception)
-                        }
-                    }
-                
-//                val db = Firebase.firestore
-//                val docRef = db.collection("settings").document("freemium")
-//
-//                docRef.get().addOnSuccessListener { document ->
-//                    if (document != null && document.exists()) {
-//                        val message = document.getString("developerMessage")
-//                        if (!message.isNullOrEmpty()) {
-//                            val dialog = AlertDialog.Builder(this@MainActivity)
-//                                .setTitle("Message from Developer")
-//                                .setMessage(message)
-//                                .setPositiveButton("OK") { dialogInterface, _ ->
-//                                    dialogInterface.dismiss()
-//                                    // Increment the display count after user dismisses
-//                                    val editor = sharedPrefs.edit()
-//                                    editor.putInt("developer_message_count", displayCount + 1)
-//                                    editor.apply()
-//                                    Logger.d("MainActivity", "Developer message display count updated to ${displayCount + 1}")
-//                                }
-//                                .show()
-//                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(
-//                                ContextCompat.getColor(this@MainActivity, R.color.black)
-//                            )
-//                            Logger.d("MainActivity", "Developer message displayed in dialog")
-//                        } else {
-//                            Logger.d("MainActivity", "Developer message is empty")
-//                        }
-//                    } else {
-//                        Logger.d("MainActivity", "Developer message document does not exist")
-//                    }
-//                }.addOnFailureListener { exception ->
-//                    Logger.e("MainActivity", "Error fetching developer message", exception)
-//                }
-            } catch (e: Exception) {
-                Logger.e("MainActivity", "Exception in displayDeveloperMessage", e)
+            if (displayCount >= 1) {
+                Logger.d(TAG, "Developer message already shown $displayCount times, skipping display")
+                return
             }
-        //}
+
+            val remoteConfig = Firebase.remoteConfig
+
+            remoteConfig.fetchAndActivate()
+                .addOnCompleteListener(this) { task ->
+                    if (task.isSuccessful) {
+                        val message = remoteConfig.getString("developerMessage")
+                        if (message.isNotEmpty()) {
+                            ui = ui.copy(developerMessage = message)
+                            Log.d(TAG, "Developer message displayed from Remote Config.")
+                        } else {
+                            Log.d(TAG, "No developer message found in Remote Config.")
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to fetch Remote Config.", task.exception)
+                    }
+                }
+        } catch (e: Exception) {
+            Logger.e(TAG, "Exception in displayDeveloperMessage", e)
+        }
+    }
+
+    /** Counts the message as shown, so it is not shown again. */
+    private fun dismissDeveloperMessage() {
+        ui = ui.copy(developerMessage = null)
+        getSharedPreferences("developer_message_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putInt("developer_message_count", 1)
+            .apply()
     }
 
     /**
      * Update the status text based on the current DeltaState
      */
     fun updateStatusText(state: DeltaState) {
-        runOnUiThread {
-            try {
-                val statusText = DeltaStateColorMapper.getStatusText(state)
-                statusTextView.text = statusText
-                Logger.d("MainActivity", "Status text updated to: $statusText for state: ${state.name}")
-            } catch (e: Exception) {
-                Logger.e("MainActivity", "Error updating status text", e)
-                statusTextView.text = "Ready" // Fallback to default
-            }
+        try {
+            val status = DeltaStateColorMapper.getStatusText(state)
+            ui = ui.copy(statusText = status)
+            Logger.d(TAG, "Status text updated to: $status for state: ${state.name}")
+        } catch (e: Exception) {
+            Logger.e(TAG, "Error updating status text", e)
+            ui = ui.copy(statusText = "Ready")
         }
     }
 
@@ -711,15 +547,17 @@ class MainActivity : BaseNavigationActivity() {
      * Update the status text with custom text (overrides state-based text)
      */
     fun updateStatusText(customText: String) {
-        runOnUiThread {
-            try {
-                statusTextView.text = customText
-                Logger.d("MainActivity", "Status text updated to custom text: $customText")
-            } catch (e: Exception) {
-                Logger.e("MainActivity", "Error updating status text with custom text", e)
-                statusTextView.text = "Ready" // Fallback to default
-            }
+        try {
+            ui = ui.copy(statusText = customText)
+            Logger.d(TAG, "Status text updated to custom text: $customText")
+        } catch (e: Exception) {
+            Logger.e(TAG, "Error updating status text with custom text", e)
+            ui = ui.copy(statusText = "Ready")
         }
     }
 
+    companion object {
+        const val ACTION_PURCHASE_UPDATED = "com.blurr.voice.PURCHASE_UPDATED"
+        private const val TAG = "MainActivity"
+    }
 }
