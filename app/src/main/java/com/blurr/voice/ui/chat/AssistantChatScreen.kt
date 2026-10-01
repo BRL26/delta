@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -70,12 +71,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,6 +103,7 @@ import com.blurr.voice.ui.voice.VoiceInputController
 import com.blurr.voice.ui.voice.VoiceInputState
 import com.blurr.voice.utilities.SpeechCoordinator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
 
 /** Which composer the user is typing/speaking into. */
 private enum class InputMode { Mic, Text }
@@ -748,6 +750,18 @@ private fun EmptyState() {
     }
 }
 
+/**
+ * True when the last item is on screen, i.e. the user has not scrolled away from the
+ * newest content.
+ *
+ * An empty list counts as pinned: there is nothing to have scrolled away from.
+ */
+private fun LazyListState.isAtBottom(): Boolean {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return true
+    return last.index >= info.totalItemsCount - 1
+}
+
 @Composable
 private fun MessageList(
     lines: List<AssistantLine>,
@@ -758,35 +772,35 @@ private fun MessageList(
 
     // Keep the newest line in view as the conversation grows.
     //
-    // Three things were wrong with the obvious version of this, and each one is visible
-    // on the phone:
+    // The obvious version of this -- read "is the last item visible?" when a line lands,
+    // and scroll if so -- never fired. Appending a line while the user is at the bottom
+    // leaves the viewport anchored, which pushes the line that *was* last off the bottom
+    // of the screen, so the question answers "no" for the instant before the catch-up
+    // scroll and the scroll is skipped. Following the tail is tracked as its own state
+    // instead, recomputed only when a scroll settles: that is the one moment the answer
+    // is unambiguous, because the user either let go at the bottom or they did not.
     //
-    //  * It only fired on a change in the line *count*. A turn appends the assistant's
-    //    reply and then a progress row, so the count moves twice for one answer -- and a
-    //    reply that arrives before the row is measured can land a frame short of the
-    //    bottom. Keyed on the newest line's id instead, which changes once per line
-    //    rather than once per render.
-    //  * `animateScrollToItem` over a long conversation is an animation the user watches
-    //    drag through every intervening bubble. `scrollToItem` is immediate, and the
-    //    fling it does not start is not missed because there is nothing to read on the
-    //    way.
-    //  * It fought the user. Any scroll or fling marks the list as no longer at the
-    //    bottom, and from then on a new message would yank the view away from whatever
-    //    they had scrolled up to read.
-    val newestId = lines.lastOrNull()?.id
-    val atBottom by remember {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            last >= listState.layoutInfo.totalItemsCount - 1
-        }
+    // Two smaller decisions, kept from the version this replaces:
+    //
+    //  * Keyed on the newest line's id rather than the line count, because a turn appends
+    //    the assistant's reply and then a progress row, and the count moves twice.
+    //  * `scrollToItem`, not `animateScrollToItem`: over a long transcript the animation
+    //    is a drag past every intervening bubble, and there is nothing to read on the way.
+    var followTail by remember { mutableStateOf(true) }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { !it }
+            .collect { followTail = listState.isAtBottom() }
     }
 
+    val newestId = lines.lastOrNull()?.id
     LaunchedEffect(newestId, isThinking) {
         val target = lines.lastIndex + if (isThinking) 1 else 0
-        // Only while pinned to the bottom. A user part-way up the transcript is reading,
-        // and being dragged to the newest message is the single most irritating thing a
-        // chat window can do.
-        if (target >= 0 && atBottom) {
+        // Only while pinned to the bottom, and never mid-drag. A user part-way up the
+        // transcript is reading, and being dragged to the newest message is the single
+        // most irritating thing a chat window can do.
+        if (target >= 0 && followTail && !listState.isScrollInProgress) {
             runCatching { listState.scrollToItem(target) }
         }
     }
