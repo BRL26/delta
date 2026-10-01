@@ -273,7 +273,15 @@ fun AssistantChatScreen(
                     sheetArrival togetherWith bubbleExit
                 }
             },
-            modifier = modifier.fillMaxSize(),
+            // Deliberately no fillMaxSize on this container. The two forms need
+            // opposite sizing -- the sheet fills the window, the bubble is capped
+            // at BubbleMaxWidth so it stays a pill -- and putting the fill on the
+            // container instead of on the sheet sets a *minimum* width of the whole
+            // display. Compose coerces a minimum up to the maximum, so
+            // min=full-screen combined with the bubble's widthIn(max=216dp)
+            // resolves to a fixed full-screen width: the cap inverts into the exact
+            // opposite bug, and the bubble spans end to end. Each branch owns its own
+            // sizing instead, and the container wraps whatever is largest.
             label = "assistantShape",
         ) { isCollapsed ->
             if (isCollapsed) {
@@ -308,6 +316,9 @@ fun AssistantChatScreen(
                 onClear = AssistantSessionState::clear,
                 onOpenSettings = onOpenSettings,
                 focusRequester = inputFocus,
+                // The caller's modifier belongs to the sheet, not to the container:
+                // it is the one form that is allowed to be told to fill.
+                modifier = modifier,
             )
         }
     }
@@ -338,8 +349,9 @@ private fun SheetLayer(
     onClear: () -> Unit,
     onOpenSettings: () -> Unit,
     focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
         // Scrim: tapping outside the sheet always gets the assistant out of the way as a
         // pill, never as a dismissal.
         //

@@ -27,6 +27,9 @@ object SideKeyActionExecutor {
         when (action.id) {
             SideKeyActionRegistry.NONE_ID -> true
 
+            SideKeyActionRegistry.CIRCLE_TO_SEARCH_ID ->
+                CircleToSearchOutcome.OPENED == AksCircleToSearch.trigger(service)
+
             SideKeyActionRegistry.GOOGLE_LENS_SCREEN_ID ->
                 LensScreenSearchOutcome.LENS_OPENED == LensScreenSearch.searchScreen(service)
 

@@ -23,26 +23,32 @@ enum class LensScreenSearchOutcome {
 /**
  * Hands whatever is on screen to Google Lens.
  *
- * The obvious thing to reach for here is Circle to Search, and the reason this does
- * not do that is worth recording, because it was tried:
+ * This is the fallback for "search this screen", not the best answer to it. The
+ * best answer is [AksCircleToSearch], which gets the real circle; this one only
+ * gets you the whole frame, which is why the registry puts Circle to Search first.
+ * It stays because it needs nothing but the Google app, so it works on a phone
+ * with no AKS install.
  *
- *  * The Circle to Search overlay has no startable entry point. The Google app
- *    answers `android.intent.action.ASSIST` from a non-exported internal gateway and
- *    draws the overlay in a window of its own, so no third-party app can start it.
- *  * It is brought up by a long press on the home indicator, which an accessibility
- *    service can synthesise -- and doing so was tried on the target device. The
- *    launcher in use (mur) has no assistant gesture bound to the bar, so the
- *    synthesised press was delivered as an ordinary long press to whatever was
- *    underneath, which on the home screen opened the launcher's own long-press menu.
- *    A shortcut that long-presses the user's screen at a fixed point is worse than no
- *    shortcut, so the gesture is gone rather than tuned.
+ * Google's own Circle to Search cannot be started by another app at all, and that
+ * was established before this path existed:
  *
- * What is left is the part of Google's own search stack that *is* reachable: Lens
- * with an image. Same engine, same visual search, same results; the difference is
- * that the region is chosen by handing over the frame rather than by dragging a
- * circle over a live surface. The screenshot is captured by the accessibility
- * service's own API and staged through a FileProvider, so no other app's permission
- * is involved and the image never leaves the device except inside the Intent.
+ *  * The overlay has no startable entry point. The Google app answers
+ *    `android.intent.action.ASSIST` from a non-exported internal gateway and draws
+ *    the overlay in a window of its own.
+ *  * It is normally brought up by a long press on the home indicator, which an
+ *    accessibility service can synthesise -- and doing so was tried on the target
+ *    device. The launcher in use (mur) has no assistant gesture bound to the bar,
+ *    so the press was delivered as an ordinary long press to whatever was
+ *    underneath, which on the home screen opened the launcher's own long-press
+ *    menu. A shortcut that long-presses the user's screen at a fixed point is
+ *    worse than no shortcut, so the gesture is not used.
+ *
+ * What is left from Google is Lens with an image: the same search engine and the
+ * same results, with the region chosen by handing over the frame rather than by
+ * dragging a circle over a live surface. The screenshot is captured by the
+ * accessibility service's own API and staged through a FileProvider, so no other
+ * app's permission is involved and the image never leaves the device except inside
+ * the Intent.
  */
 object LensScreenSearch {
 

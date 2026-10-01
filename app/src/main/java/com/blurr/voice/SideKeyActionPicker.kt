@@ -5,6 +5,8 @@ import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import com.blurr.voice.sidekey.AksCircleToSearch
+import com.blurr.voice.sidekey.CircleToSearchOutcome
 import com.blurr.voice.sidekey.EssentialKeyMapper
 import com.blurr.voice.sidekey.LensScreenSearch
 import com.blurr.voice.sidekey.LensScreenSearchOutcome
@@ -100,6 +102,20 @@ object SideKeyActionPicker {
         when (action.id) {
             SideKeyActionRegistry.NONE_ID ->
                 Toast.makeText(activity, "Do nothing has nothing to test.", Toast.LENGTH_SHORT).show()
+
+            SideKeyActionRegistry.CIRCLE_TO_SEARCH_ID -> {
+                Toast.makeText(activity, "Opening Circle to Search...", Toast.LENGTH_SHORT).show()
+                CoroutineScope(Dispatchers.Main).launch {
+                    val outcome = AksCircleToSearch.trigger(service)
+                    if (outcome == CircleToSearchOutcome.FAILED) {
+                        SideKeyNotifications.notify(
+                            activity,
+                            "Circle to Search did not open",
+                            "AKS Circle to Search needs to be installed with its accessibility service turned on."
+                        )
+                    }
+                }
+            }
 
             SideKeyActionRegistry.GOOGLE_LENS_SCREEN_ID -> {
                 Toast.makeText(activity, "Sending this screen to Google Lens...", Toast.LENGTH_SHORT).show()

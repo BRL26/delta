@@ -36,6 +36,9 @@ object SideKeyActionRegistry {
     /** The stored id that means "this press does nothing". */
     const val NONE_ID = "none"
 
+    /** Stored id for [CIRCLE_TO_SEARCH]. */
+    const val CIRCLE_TO_SEARCH_ID = "circle_to_search"
+
     /** Stored id for [GOOGLE_LENS_SCREEN]. */
     const val GOOGLE_LENS_SCREEN_ID = "google_lens_screen"
 
@@ -47,13 +50,26 @@ object SideKeyActionRegistry {
     )
 
     /**
+     * AKS-Labs Circle to Search on whatever is on screen, with the circle.
+     *
+     * Not a shortcut into AKS' app -- [AksCircleToSearch] taps AKS' own trigger so
+     * that AKS captures the screen and draws its own circle. Needs the AKS app
+     * installed and its accessibility service turned on.
+     */
+    val CIRCLE_TO_SEARCH = SideKeyActionSpec(
+        id = CIRCLE_TO_SEARCH_ID,
+        label = "Circle to Search",
+        description = "Opens AKS Circle to Search on this screen, so you can drag a circle around anything on it."
+    )
+
+    /**
      * Google Lens on whatever is on screen: the frame is captured and handed to
      * Lens, which searches it visually.
      *
-     * Named for what it does rather than for Circle to Search, which it is not.
-     * The Circle to Search overlay cannot be started by another app and is bound to
-     * a launcher gesture this device's launcher does not implement; see
-     * [LensScreenSearch] for the whole story. Same search engine, different door.
+     * [CIRCLE_TO_SEARCH] is the better pick and is first in the list. This one is
+     * kept because it works with nothing but the Google app, so it is the fallback
+     * for anyone without AKS installed. See [LensScreenSearch] for what it does
+     * and does not do.
      */
     val GOOGLE_LENS_SCREEN = SideKeyActionSpec(
         id = GOOGLE_LENS_SCREEN_ID,
@@ -62,7 +78,7 @@ object SideKeyActionRegistry {
     )
 
     /** Picker order: nothing first, then the real actions. */
-    val actions: List<SideKeyActionSpec> = listOf(NONE, GOOGLE_LENS_SCREEN)
+    val actions: List<SideKeyActionSpec> = listOf(NONE, CIRCLE_TO_SEARCH, GOOGLE_LENS_SCREEN)
 
     /** @return the spec for [id], or [NONE] when it is missing or no longer known. */
     fun specFor(id: String?): SideKeyActionSpec =
