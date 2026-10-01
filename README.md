@@ -18,11 +18,29 @@ a clean **delta** identity.
 
 ---
 
+## What's new in v1.0114.02
+
+- **🔺 The Essential Key is a real remote.** All four press types — single, double,
+  triple and long press — map to an action from one registry: Circle to Search, Google
+  Lens, **flashlight**, **quick settings**, **play/pause and track skipping**, or *open
+  any app* / *open any link* you pick. The picker is a themed sheet with a description
+  under every action and a **Test it** button that runs the choice before you save it.
+- **One front end for the assistant.** The popup is now the only owner of a
+  conversation; the floating overlay system and the legacy assistant UI are deleted, so
+  nothing keeps talking behind a window that has already closed.
+- **Home and Settings rebuilt** in the assistant's own design language — the three
+  surfaces finally read as one product.
+- **Quieter failures.** A press that cannot run logs under `SideKey` instead of posting
+  a notification on a screen you did not ask about.
+
+---
+
 ## What makes this build different
 
-This release (**v1.0114.01**) is the work of several long development sessions with
-[OpenCode](https://opencode.ai), an AI coding agent. The full, file-by-file account is
-in **[WHAT_OPENCODE_DID.md](WHAT_OPENCODE_DID.md)**. The headline changes:
+**v1.0114.01** was the work of several long development sessions with
+[OpenCode](https://opencode.ai), an AI coding agent, and **v1.0114.02** continues that
+same record. The full, file-by-file account is in
+**[WHAT_OPENCODE_DID.md](WHAT_OPENCODE_DID.md)**. The headline changes:
 
 - **🕐 Mic stays open while you talk.** The voice assistant keeps the microphone
   recording across turns instead of re-prompting you to press the mic for every
@@ -51,15 +69,15 @@ in **[WHAT_OPENCODE_DID.md](WHAT_OPENCODE_DID.md)**. The headline changes:
 Release APKs are attached to each [GitHub Release](../../releases) under `releases/`:
 
 ```
-releases/delta-1.0114.01-signed.apk   ← signed with Delta's release key — install this one
-releases/delta-1.0114.01.apk          ← unsigned build, archived for re-signing
+releases/delta-1.0114.02-signed.apk   ← signed with Delta's release key — install this one
+releases/delta-1.0114.02.apk          ← unsigned build, archived for re-signing
 ```
 
-**`delta-1.0114.01-signed.apk` is the installable artifact.** It is signed with Delta's
+**`delta-1.0114.02-signed.apk` is the installable artifact.** It is signed with Delta's
 release key (unminified, R8 off) and can be installed directly:
 
 ```bash
-adb install -r delta-1.0114.01-signed.apk
+adb install -r delta-1.0114.02-signed.apk
 ```
 
 The release key lives at `~/.android/delta-release.jks` (password in
@@ -103,6 +121,10 @@ doesn't secretly break reflection-based code paths.
   swipes, and types to complete multi-step tasks.
 * 📢 **Voice-first conversation** — talk to it like an operator; it listens, acts, and
   speaks back. No tap-to-talk needed.
+* 🔑 **Essential Key** — the Nothing side key becomes a configurable remote: four press
+  types, each mapped to an action from one list (search the screen with Circle to Search
+  or Lens, toggle the flashlight, open quick settings, control playback, or open a
+  chosen app or link), with a Test button that runs the choice before you save it.
 * ⏰ **Triggers** — start tasks from a scheduled time, an incoming notification, a
   launcher shortcut, a widget, or the assistant gesture.
 * 💾 **Local memory** — ⚠️ currently disabled (see `docs/MEMORY_STATUS.md`).
@@ -125,7 +147,7 @@ development record of this release is in
 * `./gradlew :app:assembleRelease` — release APK, unminified, **signed automatically**
   when the `DELTA_RELEASE_*` keys are set in `local.properties` (see the template);
   falls back to unsigned with a warning otherwise.
-* `./gradlew :app:testDebugUnitTest` — unit tests (56 passing).
+* `./gradlew :app:testDebugUnitTest` — unit tests (97 passing).
 
 ---
 

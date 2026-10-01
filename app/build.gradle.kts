@@ -238,9 +238,12 @@ tasks.register("incrementVersion") {
             1
         }
         val newVersionName = if (versionParts.size >= 2) {
-            "${versionParts[0]}.${versionParts[1]}.$newPatchVersion"
+            // Patch is padded to two digits, because that is how every version has
+            // been written so far (1.0114.01): an unpadded "1.0114.2" would be the
+            // one release in the list that does not look like the others.
+            "${versionParts[0]}.${versionParts[1]}.${"%02d".format(newPatchVersion)}"
         } else {
-            "1.0.$newPatchVersion"
+            "1.0.${"%02d".format(newPatchVersion)}"
         }
 
         // Update properties

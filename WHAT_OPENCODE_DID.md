@@ -9,6 +9,12 @@ Sessions worked as a collaboration with the project owner: OpenCode wrote code, 
 installed it on a physical phone, investigated behaviour with live logcat/dumpsys while
 the owner tested, and iterate until each behaviour matched what was asked.
 
+> **Note on §9.** Sections 1–8 cover v1.0114.01. Section 9 covers **v1.0114.02**, which
+> began as uncommitted changes in an OpenCode session and was finished by a follow-up
+> session with a different agent (Buffy, of Freebuff) working with the same owner. It is
+> recorded here because this file is the project's development record, not a record of
+> one tool — and because the state it was found in is part of the story.
+
 ---
 
 ## 1. Voice assistant changes (`VoiceInputController`, `AssistantChatScreen`)
@@ -247,4 +253,84 @@ Highlights:
   and `ActionParsingTest.kt` pins the empty-`{}` argument parsing the tool actions rely
   on (59 tests total, all green).
 
-*Written by OpenCode and the project owner, September 2026.*
+---
+
+## 9. Essential Key: the action registry, chosen targets, and the Compose picker (v1.0114.02)
+
+**State it was found in:** uncommitted changes across six files plus three new files,
+and a build that did not compile (`SettingsActivity` called `SideKeyActionRegistry` with
+no import). The intent was clear from the code -- the picker had been rewired to Compose,
+three actions had been added to the registry, and app/link targets had been encoded into
+the ids -- but none of it had ever been compiled, tested, or run on a phone.
+
+### What it became
+
+- **Five new actions** in the registry: `toggle_flashlight`, `open_quick_settings`,
+  `media_play_pause`, `media_next`, `media_previous`, grouped after the screen-reading
+  ones the way a hand reaches for them. They live as data, so the press rows, the picker
+  and the prefs pick them up without knowing they exist; only
+  [`SideKeyActionExecutor`](app/src/main/java/com/blurr/voice/sidekey/SideKeyActionExecutor.kt)
+  gained arms, plus [`SideKeyShortcuts`](app/src/main/java/com/blurr/voice/sidekey/SideKeyShortcuts.kt)
+  for the platform work each one actually needs (torch state has no getter on Android, so
+  the last known state is kept; media keys must be sent as full down/up pairs or the
+  player stops responding).
+- **Chosen targets as ids.** `open_app:com.example` / `open_link:geo:0,0?q=coffee` keep
+  the target inside the one string prefs already store, so there is no second table to
+  keep in sync: [`SideKeyTargets`](app/src/main/java/com/blurr/voice/sidekey/SideKeyTargets.kt)
+  parses, labels and launches it, the registry resolves it to a spec instead of degrading
+  it to "do nothing", and the executor matches it by shape before anything else.
+- **A three-step Compose picker** (`ui/sidekey/SideKeyActionDialog.kt`): the catalogue,
+  *Which app?*, *Which link?* -- replacing an `AlertDialog` over a `ListView`, the one
+  screen in the app still wearing the system's look.
+- **Silent failures.** The "Side key did not run" notification is gone with its channel:
+  a press that fails now writes one `Log.w` line.
+
+### Bugs found while finishing it, and what was done
+
+1. **It did not compile.** Missing `SideKeyActionRegistry` import in `SettingsActivity.kt`.
+2. **"Test it" claimed it could not test what it could test.** The button was enabled for
+   every row, but only knew *Do nothing*, *Circle to Search* and *Lens* -- so testing an
+   existing app mapping toasted *"No test available for Open app."* It now takes the
+   stored id: chosen targets are launched directly (they need no accessibility service),
+   and the new fixed actions run through `SideKeyActionExecutor`, so a test cannot drift
+   from what the key would do.
+3. **`isKnown` answered `false` for "do nothing"** -- `specFor(id).id != NONE_ID` makes
+   the question answer itself, contradicting the doc above it. It now reads the catalogue.
+   Pinned by a test, which is how it was caught.
+4. **The system back key threw the choice away.** From *Which app?* or *Which link?*, back
+   dismissed the whole dialog instead of returning to the list -- and the window sees the
+   back key before anything in Compose does, so no `BackHandler` could have helped. The
+   step now lives outside the composition (`SideKeyPickerNav`) and the dialog's own key
+   listener answers it: go back a step when there is one, close when there isn't.
+5. **"Looking for apps…" could show forever.** An empty list was indistinguishable from
+   one still being fetched. `null` now means *not asked for yet*.
+6. **`incrementVersion` dropped the patch's leading zero**, which would have made this
+   release `1.0114.2` next to `1.0114.01`. The patch is now written with two digits.
+7. Dead code and rough edges: `SideKeyNotifications.kt` deleted (its last caller had gone
+   earlier in the session), `Sheet`'s unused `onDismiss` parameter removed, three missing
+   end-of-file newlines restored.
+
+### Verification
+
+- `:app:compileDebugKotlin`, `:app:assembleDebug`, `:app:assembleRelease` all green.
+- `:app:testDebugUnitTest` -- **97 tests, 0 failures** (59 at v1.0114.01). New
+  `SideKeyTargetsTest` pins the encoded-id contract that prefs, registry and executor
+  all depend on.
+- Debug build installed and run on the physical device, accessibility service bound.
+
+### Release (v1.0114.02)
+
+- `version.properties`: `VERSION_CODE=115`, `VERSION_NAME=1.0114.02`, produced by the
+  project's own `incrementVersion` task (now zero-padding the patch) rather than pinned
+  by hand as 1.0114.01 was.
+- `releases/delta-1.0114.02-signed.apk` signed with the **same release key** as
+  1.0114.01 -- verified by certificate digest -- so it installs as an update. The
+  unsigned build is archived beside it, `SHA256SUMS` covers all four artifacts, and
+  `releases/release-notes-1.0114.02.md` is what the GitHub Release ships as its notes.
+- Signed build installed on the device: `versionCode=115`, `versionName=1.0114.02`,
+  accessibility service re-enabled and bound, no crashes in logcat.
+
+---
+
+*Written by OpenCode and the project owner, September 2026. Section 9 added by a
+follow-up session with Buffy (Freebuff) and the project owner.*

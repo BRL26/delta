@@ -25,6 +25,9 @@ VERSION_NAME=1.0.13      # Semantic version (x.y.z) - patch number increments
 
 - **Version Code**: Increments by 1 (13 → 14 → 15...)
 - **Version Name**: Increments patch version (1.0.13 → 1.0.14 → 1.0.15...)
+- **Patch padding**: the patch is always written with at least two digits, so every entry
+  in the release list looks like the one before it (`1.0114.01` → `1.0114.02`, never
+  `1.0114.2`).
 
 ### Build Behavior
 
