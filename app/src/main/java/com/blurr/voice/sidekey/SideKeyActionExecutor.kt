@@ -27,15 +27,8 @@ object SideKeyActionExecutor {
         when (action.id) {
             SideKeyActionRegistry.NONE_ID -> true
 
-            SideKeyActionRegistry.CIRCLE_TO_SEARCH_ID ->
-                when (CircleToSearch.trigger(service)) {
-                    CircleToSearchOutcome.OVERLAY_OPENED,
-                    CircleToSearchOutcome.LENS_FALLBACK -> true
-                    CircleToSearchOutcome.FAILED -> {
-                        Log.w(TAG, "Circle to Search could not be started")
-                        false
-                    }
-                }
+            SideKeyActionRegistry.GOOGLE_LENS_SCREEN_ID ->
+                LensScreenSearchOutcome.LENS_OPENED == LensScreenSearch.searchScreen(service)
 
             else -> {
                 // A stored id with no implementation behind it. Treated as a

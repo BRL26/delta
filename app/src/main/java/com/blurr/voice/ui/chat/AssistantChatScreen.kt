@@ -1,6 +1,17 @@
 package com.blurr.voice.ui.chat
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -84,6 +95,7 @@ import com.blurr.voice.R
 import com.blurr.voice.assistant.AssistantInput
 import com.blurr.voice.assistant.AssistantLine
 import com.blurr.voice.assistant.AssistantLineRole
+import com.blurr.voice.assistant.AssistantChatState
 import com.blurr.voice.assistant.AssistantSessionState
 import com.blurr.voice.assistant.SessionBridge
 import com.blurr.voice.ui.voice.VoiceInputController
@@ -225,27 +237,109 @@ fun AssistantChatScreen(
         }
     }
 
-    // Declared after the voice effects above so that collapsing does not dispose them:
-    // the controller and the conversation survive the round trip through the bubble,
-    // which is what makes expanding feel like resuming rather than restarting.
-    // Everything below this line belongs to the full sheet only.
-    if (collapsed) {
-        AssistantBubble(
-            activity = state.activity,
-            isThinking = state.isThinking,
-            // Not SessionBridge::expand: a tap is the user asking, which outranks the
-            // keep-as-a-bubble mode, so it goes through the path that says so.
-            onExpand = SessionBridge::expandOnUserRequest,
-            // Goes through AssistantInput rather than reaching into either service. The
-            // bubble outlives the window's owner and has no business knowing that "stop"
-            // means two different Intent actions in two different services.
-            onStop = { AssistantInput.stop(context) },
-            onClose = SessionBridge::requestClose,
-        )
-        return
-    }
+    // The shape swap is animated rather than instantaneous. The window itself is
+    // resized by the session in the same frame (there is no way to animate a
+    // WindowManager relayout from in here), so the animation lives on the content:
+    // what the user sees is the incoming shape arriving while the outgoing one is on
+    // its way out, which is what turns "the popup appeared" into something that reads
+    // as a response to the press.
+    //
+    // Direction matters, and not symmetrically. Expanding grows into a window that is
+    // now full-screen, so the outgoing bubble is still laid out in a sensible spot --
+    // the top-left corner it already occupied -- and both halves can be animated at
+    // full length. Collapsing is the other way round: the window is already
+    // WRAP_CONTENT by the time this runs, so a lingering full sheet would be a clipped
+    // mess inside a bubble-sized window. There the sheet leaves almost at once and all
+    // the motion is spent on the bubble arriving.
+    // The very first frame is not a transition: AnimatedContent shows its initial
+    // target with nothing animating, which is the one moment the user is guaranteed
+    // to be looking at. So the opening itself is driven from here, with the entrance
+    // chosen by the shape the popup is opening as -- a fresh invocation is always the
+    // sheet, and only our own restore arrives as a bubble.
+    var opened by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { opened = true }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    AnimatedVisibility(
+        visible = opened,
+        enter = if (collapsed) bubbleArrival else sheetArrival,
+        exit = fadeOut(tween(100)),
+    ) {
+        AnimatedContent(
+            targetState = collapsed,
+            transitionSpec = {
+                if (targetState) {
+                    bubbleArrival togetherWith sheetExit
+                } else {
+                    sheetArrival togetherWith bubbleExit
+                }
+            },
+            modifier = modifier.fillMaxSize(),
+            label = "assistantShape",
+        ) { isCollapsed ->
+            if (isCollapsed) {
+                AssistantBubble(
+                    activity = state.activity,
+                    isThinking = state.isThinking,
+                    // Not SessionBridge::expand: a tap is the user asking, which outranks the
+                    // keep-as-a-bubble mode, so it goes through the path that says so.
+                    onExpand = SessionBridge::expandOnUserRequest,
+                    // Goes through AssistantInput rather than reaching into either service. The
+                    // bubble outlives the window's owner and has no business knowing that "stop"
+                    // means two different Intent actions in two different services.
+                    onStop = { AssistantInput.stop(context) },
+                    onClose = SessionBridge::requestClose,
+                )
+                return@AnimatedContent
+            }
+
+            SheetLayer(
+                state = state,
+                voiceState = voiceState,
+                inputMode = inputMode,
+                stayCollapsed = stayCollapsed,
+                onToggleStayCollapsed = { SessionBridge.setStayCollapsed(!stayCollapsed) },
+                draft = draft,
+                onDraftChange = { draft = it },
+                onInputModeChange = { inputMode = it },
+                onSubmit = ::submit,
+                onMicClick = {
+                    if (voiceState.listening) voice.stop() else voice.start()
+                },
+                onClear = AssistantSessionState::clear,
+                onOpenSettings = onOpenSettings,
+                focusRequester = inputFocus,
+            )
+        }
+    }
+}
+
+private const val ScrimAlpha = 0.55f
+
+/**
+ * The full sheet: the scrim behind it and the conversation itself, in the window.
+ *
+ * Extracted from [AssistantChatScreen] so the shape swap can be an
+ * [AnimatedContent] over the two forms. It holds no state of its own -- everything
+ * it needs is passed in -- so the animation is purely a change of what is on screen
+ * and not a change of who owns what.
+ */
+@Composable
+private fun SheetLayer(
+    state: AssistantChatState,
+    voiceState: VoiceInputState,
+    inputMode: InputMode,
+    stayCollapsed: Boolean,
+    onToggleStayCollapsed: () -> Unit,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onInputModeChange: (InputMode) -> Unit,
+    onSubmit: (String) -> Unit,
+    onMicClick: () -> Unit,
+    onClear: () -> Unit,
+    onOpenSettings: () -> Unit,
+    focusRequester: FocusRequester,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
         // Scrim: tapping outside the sheet always gets the assistant out of the way as a
         // pill, never as a dismissal.
         //
@@ -287,22 +381,18 @@ fun AssistantChatScreen(
                 stayCollapsed = stayCollapsed,
                 onToggleStayCollapsed = { SessionBridge.setStayCollapsed(!stayCollapsed) },
                 draft = draft,
-                onDraftChange = { draft = it },
-                onInputModeChange = { inputMode = it },
-                onSubmit = ::submit,
-                onMicClick = {
-                    if (voiceState.listening) voice.stop() else voice.start()
-                },
-                onClear = AssistantSessionState::clear,
+                onDraftChange = onDraftChange,
+                onInputModeChange = onInputModeChange,
+                onSubmit = onSubmit,
+                onMicClick = onMicClick,
+                onClear = onClear,
                 onOpenSettings = onOpenSettings,
                 onGrantMicPermission = onOpenSettings,
-                focusRequester = inputFocus,
+                focusRequester = focusRequester,
             )
         }
     }
 }
-
-private const val ScrimAlpha = 0.55f
 
 /**
  * The collapsed assistant: one line saying what it is doing, and nothing else.
@@ -316,6 +406,39 @@ private const val ScrimAlpha = 0.55f
  * while the bubble itself stays interactive, which is the user's way to get their
  * transcript back without waiting for the answer.
  */
+/**
+ * How the bubble arrives when the sheet collapses away.
+ *
+ * A spring on the scale rather than a fixed duration, so the bubble settles at the
+ * user's pace rather than snapping to a stop. The fade runs on a tween because a
+ * fading opacity on a spring reads as a flicker.
+ */
+private val bubbleArrival = scaleIn(
+    initialScale = 0.82f,
+    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+) + fadeIn(tween(160))
+
+/** The bubble leaving as the sheet takes over: quicker and flatter, it is on its way out. */
+private val bubbleExit = scaleOut(targetScale = 0.9f, animationSpec = tween(150)) + fadeOut(tween(150))
+
+/**
+ * How the sheet arrives, both from a bubble and on the very first appearance of the
+ * popup. Rising from below with a slight scale reads as the sheet being placed on the
+ * screen; the spring overshoots very little because this is a large surface and any
+ * visible bounce looks like a wobble.
+ */
+private val sheetArrival = slideInVertically(
+    animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow),
+    initialOffsetY = { fullHeight -> fullHeight / 4 },
+) + scaleIn(initialScale = 0.96f, animationSpec = tween(200)) + fadeIn(tween(180))
+
+/**
+ * The sheet leaving. Short on purpose: by the time this plays the session window is
+ * already bubble-sized, so every extra frame of the sheet is another frame of a
+ * full-height layout squeezed into a corner.
+ */
+private val sheetExit = fadeOut(tween(90))
+
 @Composable
 private fun AssistantBubble(
     activity: String?,
@@ -663,12 +786,19 @@ private fun MessageList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(items = lines, key = { it.id }) { line ->
-            LineRow(line)
+            // Each new line fades in rather than being there between one frame and
+            // the next. Only the appearance is animated: the placement spec is
+            // snapped, because an item appearing is not a reason for the whole
+            // transcript to slide, and the user is the one who moved the list.
+            LineRow(line, Modifier.animateItem(fadeInSpec = tween(200), placementSpec = snap()))
         }
 
         if (isThinking) {
             item(key = "thinking") {
-                ThinkingBubble(activity = activity)
+                ThinkingBubble(
+                    activity = activity,
+                    modifier = Modifier.animateItem(fadeInSpec = tween(200), placementSpec = snap()),
+                )
             }
         }
 
@@ -677,18 +807,18 @@ private fun MessageList(
 }
 
 @Composable
-private fun LineRow(line: AssistantLine) {
+private fun LineRow(line: AssistantLine, modifier: Modifier = Modifier) {
     when (line.role) {
-        AssistantLineRole.Activity -> ActivityRow(line)
-        else -> MessageBubble(line)
+        AssistantLineRole.Activity -> ActivityRow(line, modifier)
+        else -> MessageBubble(line, modifier)
     }
 }
 
 @Composable
-private fun MessageBubble(line: AssistantLine) {
+private fun MessageBubble(line: AssistantLine, modifier: Modifier = Modifier) {
     val isUser = line.role == AssistantLineRole.User
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
@@ -729,9 +859,9 @@ private fun MessageBubble(line: AssistantLine) {
  * model asserted.
  */
 @Composable
-private fun ActivityRow(line: AssistantLine) {
+private fun ActivityRow(line: AssistantLine, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.Start,
@@ -760,9 +890,9 @@ private fun ActivityRow(line: AssistantLine) {
 }
 
 @Composable
-private fun ThinkingBubble(activity: String?) {
+private fun ThinkingBubble(activity: String?, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically,
     ) {

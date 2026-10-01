@@ -6,6 +6,9 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewPropertyAnimator
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -42,7 +45,21 @@ class AgentStatusPill @JvmOverloads constructor(
     private var onStop: (() -> Unit)? = null
     private var onDismiss: (() -> Unit)? = null
 
+    /**
+     * The exit animation, if one is running.
+     *
+     * Held so a [show] arriving mid-exit can cancel it and reverse from wherever the
+     * pill had got to, rather than snapping back to full opacity and then fading in
+     * again -- the flicker that a new task starting as the old one finishes.
+     */
+    private var exitAnimation: ViewPropertyAnimator? = null
+
     init {
+        // Starts fully transparent: the window is added before the first [show]
+        // arrives, and a pill that is briefly opaque at full size before animating
+        // in is exactly the pop the animation is meant to remove. [show] brings the
+        // alpha up, [hide] takes it back down.
+        alpha = 0f
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         // Asymmetric on purpose: the close button's own touch padding supplies
@@ -157,6 +174,14 @@ class AgentStatusPill @JvmOverloads constructor(
     }
 
     /**
+     * Brings the pill onto the screen, animated.
+     *
+     * The pill is the only thing on screen while a task runs, so it arrives from
+     * slightly above and slightly small and settles into place, which reads as
+     * "this is here now" rather than as a rectangle that simply exists. Reversible:
+     * a [show] while an exit is still running picks up from the current values
+     * instead of restarting.
+     *
      * @param goal     the original request, shown when there is no activity text
      * @param activity the model's plain-language description of the current step
      * @param step     current step, rendered as "n/m" when [maxSteps] is given
@@ -179,8 +204,29 @@ class AgentStatusPill @JvmOverloads constructor(
                 append("  ·  ").append(step).append('/').append(maxSteps)
             }
         }
-        visibility = View.VISIBLE
         if (!progress.isIndeterminate) progress.isIndeterminate = true
+
+        exitAnimation?.cancel()
+        exitAnimation = null
+        if (visibility == View.VISIBLE && alpha >= 1f) return // already up, nothing to do
+
+        visibility = View.VISIBLE
+        // Continuing from the current values rather than resetting them is what makes
+        // an interrupted exit resume instead of jumping back to the start position.
+        alpha = alpha.coerceIn(0f, 1f)
+        scaleX = scaleX.coerceIn(ENTER_SCALE, 1f)
+        scaleY = scaleY.coerceIn(ENTER_SCALE, 1f)
+        translationY = translationY.coerceIn(-dp(12f).toFloat(), 0f)
+
+        animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .translationY(0f)
+            .setDuration(ENTER_DURATION_MS)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction(null)
+            .start()
     }
 
     /**
@@ -193,13 +239,55 @@ class AgentStatusPill @JvmOverloads constructor(
         closeButton.setOnClickListener { onDismiss?.invoke() }
     }
 
-    /** Drops the pill off the screen. */
+    /**
+     * Takes the pill off the screen, animated.
+     *
+     * Faded and shrunk rather than simply set GONE, because it is removed abruptly
+     * often enough to notice: a task that opens an app collapses the whole assistant
+     * at the exact moment the user is looking at the screen they asked for.
+     *
+     * The view is only set GONE when the animation actually ends, so a hide that is
+     * interrupted by a show cannot leave the pill invisible. Callers still remove the
+     * view from the window separately; this is about how it looks on the way out.
+     */
     fun hide() {
         onStop = null
-        visibility = View.GONE
+        if (visibility != View.VISIBLE) {
+            visibility = View.GONE
+            return
+        }
+        exitAnimation?.cancel()
+        // Assigned before starting, and started separately, because start() returns
+        // Unit and what needs holding on to is the animator itself.
+        val exiting = animate()
+            .alpha(0f)
+            .scaleX(ENTER_SCALE)
+            .scaleY(ENTER_SCALE)
+            .translationY(-dp(12f).toFloat())
+            .setDuration(EXIT_DURATION_MS)
+            // Straight fade, not a decelerate: a short exit that keeps easing reads
+            // as the pill hesitating on its way out.
+            .setInterpolator(AccelerateDecelerateInterpolator())
+            .withEndAction {
+                exitAnimation = null
+                visibility = View.GONE
+            }
+        exitAnimation = exiting
+        exiting.start()
     }
 
     private fun dp(v: Float): Int = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics
     ).toInt()
+
+    private companion object {
+        /** How long the pill takes to arrive. Long enough to see, short enough to ignore. */
+        const val ENTER_DURATION_MS = 220L
+
+        /** The exit is quicker than the entrance: the user is waiting for their screen. */
+        const val EXIT_DURATION_MS = 160L
+
+        /** The scale the pill grows up from, and shrinks back down to. */
+        const val ENTER_SCALE = 0.9f
+    }
 }

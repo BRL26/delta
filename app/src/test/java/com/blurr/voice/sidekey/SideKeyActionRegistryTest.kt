@@ -1,15 +1,13 @@
 package com.blurr.voice.sidekey
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The action registry is the extension point for the press menu, so its two
- * guarantees are pinned here: an unknown id degrades to "do nothing" instead of
- * throwing, and the Circle to Search overlay check only accepts Google search
- * windows.
+ * The action registry is the extension point for the press menu, so its guarantee
+ * is pinned here: an id that is missing, or that belonged to an action which has
+ * since been removed, degrades to "do nothing" instead of throwing or leaving a
+ * press mapped to something with no implementation behind it.
  */
 class SideKeyActionRegistryTest {
 
@@ -35,17 +33,5 @@ class SideKeyActionRegistryTest {
         for (action in SideKeyActionRegistry.actions) {
             assertEquals(action, SideKeyActionRegistry.specFor(action.id))
         }
-    }
-
-    @Test
-    fun `a google search window is recognised as the overlay`() {
-        assertTrue(CircleToSearch.looksLikeSearchOverlay(listOf("com.google.android.googlequicksearchbox")))
-        assertTrue(CircleToSearch.looksLikeSearchOverlay(listOf("com.android.systemui", "com.google.android.apps.lens")))
-    }
-
-    @Test
-    fun `an ordinary window is not the overlay`() {
-        assertFalse(CircleToSearch.looksLikeSearchOverlay(listOf("com.brl.blurrmbtg")))
-        assertFalse(CircleToSearch.looksLikeSearchOverlay(emptyList()))
     }
 }

@@ -5,9 +5,9 @@ import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
-import com.blurr.voice.sidekey.CircleToSearch
-import com.blurr.voice.sidekey.CircleToSearchOutcome
 import com.blurr.voice.sidekey.EssentialKeyMapper
+import com.blurr.voice.sidekey.LensScreenSearch
+import com.blurr.voice.sidekey.LensScreenSearchOutcome
 import com.blurr.voice.sidekey.KeyGesture
 import com.blurr.voice.sidekey.SideKeyActionRegistry
 import com.blurr.voice.sidekey.SideKeyActionSpec
@@ -22,9 +22,9 @@ import kotlinx.coroutines.launch
  * The list is rendered straight from [SideKeyActionRegistry.actions], so adding
  * an action later needs no change here: the new entry appears in the dialog and
  * in the settings row on its own. A neutral "Test it" button runs the highlighted
- * action immediately, which matters most for Circle to Search -- the user can
- * confirm it works before committing to the mapping, without having to go find
- * something on another screen to point it at.
+ * action immediately -- which matters most for the screen-reading actions, since
+ * the thing they read is whatever happens to be on the display at the time, and
+ * that is usually not the settings screen.
  */
 object SideKeyActionPicker {
 
@@ -101,20 +101,15 @@ object SideKeyActionPicker {
             SideKeyActionRegistry.NONE_ID ->
                 Toast.makeText(activity, "Do nothing has nothing to test.", Toast.LENGTH_SHORT).show()
 
-            SideKeyActionRegistry.CIRCLE_TO_SEARCH_ID -> {
-                Toast.makeText(activity, "Trying Circle to Search...", Toast.LENGTH_SHORT).show()
+            SideKeyActionRegistry.GOOGLE_LENS_SCREEN_ID -> {
+                Toast.makeText(activity, "Sending this screen to Google Lens...", Toast.LENGTH_SHORT).show()
                 CoroutineScope(Dispatchers.Main).launch {
-                    when (CircleToSearch.trigger(service)) {
-                        CircleToSearchOutcome.OVERLAY_OPENED -> Unit
-                        CircleToSearchOutcome.LENS_FALLBACK -> SideKeyNotifications.notify(
+                    val outcome = LensScreenSearch.searchScreen(service)
+                    if (outcome == LensScreenSearchOutcome.FAILED) {
+                        SideKeyNotifications.notify(
                             activity,
-                            "Circle to Search",
-                            "The search gesture did nothing on this build, so the screen went to Google Lens instead."
-                        )
-                        CircleToSearchOutcome.FAILED -> SideKeyNotifications.notify(
-                            activity,
-                            "Circle to Search failed",
-                            "Neither the search gesture nor the Lens fallback could start."
+                            "Google Lens did not open",
+                            "The screen could not be captured, or Google Lens refused it."
                         )
                     }
                 }

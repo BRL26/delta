@@ -36,8 +36,8 @@ object SideKeyActionRegistry {
     /** The stored id that means "this press does nothing". */
     const val NONE_ID = "none"
 
-    /** Stored id for [CIRCLE_TO_SEARCH]. */
-    const val CIRCLE_TO_SEARCH_ID = "circle_to_search"
+    /** Stored id for [GOOGLE_LENS_SCREEN]. */
+    const val GOOGLE_LENS_SCREEN_ID = "google_lens_screen"
 
     /** The action every unmapped press resolves to. */
     val NONE = SideKeyActionSpec(
@@ -47,17 +47,22 @@ object SideKeyActionRegistry {
     )
 
     /**
-     * Google's Circle to Search on whatever is on screen, brought up by the
-     * same home-indicator long-press the user would do by hand.
+     * Google Lens on whatever is on screen: the frame is captured and handed to
+     * Lens, which searches it visually.
+     *
+     * Named for what it does rather than for Circle to Search, which it is not.
+     * The Circle to Search overlay cannot be started by another app and is bound to
+     * a launcher gesture this device's launcher does not implement; see
+     * [LensScreenSearch] for the whole story. Same search engine, different door.
      */
-    val CIRCLE_TO_SEARCH = SideKeyActionSpec(
-        id = CIRCLE_TO_SEARCH_ID,
-        label = "Circle to Search",
-        description = "Opens Google's circle-to-search on this screen so you can drag a circle around anything on it."
+    val GOOGLE_LENS_SCREEN = SideKeyActionSpec(
+        id = GOOGLE_LENS_SCREEN_ID,
+        label = "Google Lens",
+        description = "Searches the screen you are on with Google Lens: text, objects, products, places."
     )
 
     /** Picker order: nothing first, then the real actions. */
-    val actions: List<SideKeyActionSpec> = listOf(NONE, CIRCLE_TO_SEARCH)
+    val actions: List<SideKeyActionSpec> = listOf(NONE, GOOGLE_LENS_SCREEN)
 
     /** @return the spec for [id], or [NONE] when it is missing or no longer known. */
     fun specFor(id: String?): SideKeyActionSpec =
