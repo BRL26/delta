@@ -40,7 +40,6 @@ import com.blurr.voice.overlay.OverlayManager
 import com.blurr.voice.overlay.OverlayDispatcher
 import com.blurr.voice.utilities.DeltaState
 import com.blurr.voice.utilities.UserProfileManager
-import com.blurr.voice.utilities.VisualFeedbackManager
 import com.blurr.voice.v2.AgentService
 import com.blurr.voice.assistant.AssistantInput
 import com.blurr.voice.assistant.AssistantSessionState
@@ -91,9 +90,6 @@ class ConversationalAgentService : Service() {
     private var conversationHistory = listOf<Pair<String, List<Any>>>()
     private val ttsManager by lazy { TTSManager.getInstance(this) }
     private val overlayManager by lazy { OverlayManager.getInstance(this) }
-    private val clarificationQuestionViews = mutableListOf<View>()
-    private var transcriptionView: TextView? = null
-    private val visualFeedbackManager by lazy { VisualFeedbackManager.getInstance(this) }
     private val deltaStateManager by lazy { DeltaStateManager.getInstance(this) }
     private var isTextModeActive = false
     private val freemiumManager by lazy { FreemiumManager() }
@@ -105,7 +101,6 @@ class ConversationalAgentService : Service() {
     private val maxSttErrorAttempts = 2
 
     private val clarificationAgent = ClarificationAgent()
-    private val windowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var cachedMemories = listOf<UserMemory>()
     private var hasHeardFirstUtterance = false
@@ -151,11 +146,6 @@ class ConversationalAgentService : Service() {
 
         OverlayDispatcher.clearAll()
         overlayManager.startObserving()
-        visualFeedbackManager.showSpeakingOverlay() // <-- ADD THIS LINE
-        visualFeedbackManager.showTtsWave()
-
-        showInputBoxIfNeeded()
-        visualFeedbackManager.showSmallDeltaGlow()
 
         // Start state monitoring and set initial state
         deltaStateManager.startMonitoring()
@@ -177,30 +167,6 @@ class ConversationalAgentService : Service() {
      */
     private fun popupOwnsScreen(): Boolean = SessionBridge.sessionVisible.value
 
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun showInputBoxIfNeeded() {
-        // The popup has a text composer of its own, so there is nothing to ask for here.
-        if (popupOwnsScreen()) {
-            Log.d("ConvAgent", "Assistant popup owns the screen; not showing the overlay input box.")
-            return
-        }
-        visualFeedbackManager.showInputBox(
-            onActivated = {
-                // This is called when the user taps the EditText
-                enterTextMode()
-            },
-            onSubmit = { submittedText ->
-                // This is the existing callback for when text is submitted
-                processUserInput(submittedText)
-            },
-            onOutsideTap = {
-                serviceScope.launch {
-                    instantShutdown()
-                }
-            }
-        )
-    }
-
     /**
      * Call this when the user starts interacting with the text input.
      * It stops any ongoing voice interaction.
@@ -217,7 +183,6 @@ class ConversationalAgentService : Service() {
         speechCoordinator.stopListening()
         speechCoordinator.stopSpeaking()
         // Optionally hide the transcription view since user is typing
-        visualFeedbackManager.hideTranscription()
     }
 
 
@@ -332,12 +297,11 @@ class ConversationalAgentService : Service() {
             return
         }
 
-        // Check if we are in text mode before starting to listen
+        // Text mode is entered from the popup's own composer, so there is no overlay
+        // input box to re-show here -- the popup is the thing waiting for their words.
+        // Skipping the voice listener is still the point: the user chose to type.
         if (isTextModeActive) {
-            Log.d("ConvAgent", "In text mode, ensuring input box is visible and skipping voice listening.")
-            mainHandler.post {
-                showInputBoxIfNeeded() // Re-show the input box for the next turn.
-            }
+            Log.d("ConvAgent", "In text mode, skipping voice listening.")
             return // Skip starting the voice listener entirely.
         }
 
@@ -348,9 +312,7 @@ class ConversationalAgentService : Service() {
                 if (isTextModeActive) return@startListening // Ignore results in text mode
                 Log.d("ConvAgent", "Final user transcription: $recognizedText")
                 deltaStateManager.setState(DeltaState.PROCESSING)
-                visualFeedbackManager.updateTranscription(recognizedText)
                 mainHandler.postDelayed({
-                    visualFeedbackManager.hideTranscription()
                 }, 500)
 
                 
@@ -368,14 +330,12 @@ class ConversationalAgentService : Service() {
                 // utterance still arrives through onResult untouched.
                 if (AgentService.isRunning) {
                     Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
-                    visualFeedbackManager.hideTranscription()
                     deltaStateManager.setState(DeltaState.IDLE)
                     return@startListening
                 }
 
                 if (error == "No speech match") {
                     Log.d("ConvAgent", "No speech match detected. Silently resetting to IDLE.")
-                    visualFeedbackManager.hideTranscription()
                     deltaStateManager.setState(DeltaState.IDLE)
                     // We return early so we don't trigger the "I didn't catch that" logic
                     return@startListening
@@ -391,7 +351,6 @@ class ConversationalAgentService : Service() {
                 }
                 firebaseAnalytics.logEvent("stt_error", sttErrorBundle)
                 
-                visualFeedbackManager.hideTranscription()
                 sttErrorAttempts++
                 serviceScope.launch {
                     if (sttErrorAttempts >= maxSttErrorAttempts) {
@@ -407,14 +366,12 @@ class ConversationalAgentService : Service() {
             },
             onPartialResult = { partialText ->
                 if (isTextModeActive) return@startListening // Ignore partial results in text mode
-                visualFeedbackManager.updateTranscription(partialText)
             },
             onListeningStateChange = { listening ->
                 Log.d("ConvAgent", "Listening state: $listening")
                 if (listening) {
                     if (isTextModeActive) return@startListening // Ignore state changes in text mode
                     deltaStateManager.setState(DeltaState.LISTENING)
-                    visualFeedbackManager.showTranscription()
                 } else {
                     if (!isTextModeActive) {
                         deltaStateManager.setState(DeltaState.IDLE)
@@ -464,11 +421,7 @@ class ConversationalAgentService : Service() {
         }
         // --- CHANGE 4: Check if we are in text mode before starting to listen ---
         if (isTextModeActive) {
-            Log.d("ConvAgent", "In text mode, ensuring input box is visible and skipping voice listening.")
-            // Post to main handler to ensure UI operations are on the main thread.
-            mainHandler.post {
-                showInputBoxIfNeeded() // Re-show the input box for the next turn.
-            }
+            Log.d("ConvAgent", "In text mode, skipping voice listening.")
             return // IMPORTANT: Skip starting the voice listener entirely.
         }
         speechCoordinator.startListening(
@@ -476,9 +429,7 @@ class ConversationalAgentService : Service() {
                 if (isTextModeActive) return@startListening // Ignore errors in text mode
                 Log.d("ConvAgent", "Final user transcription: $recognizedText")
                 deltaStateManager.setState(DeltaState.PROCESSING)
-                visualFeedbackManager.updateTranscription(recognizedText)
                 mainHandler.postDelayed({
-                    visualFeedbackManager.hideTranscription()
                 }, 500)
                 
                 // Mark that we've heard the first utterance and trigger memory extraction if not already done
@@ -508,7 +459,6 @@ class ConversationalAgentService : Service() {
                 // keeps working untouched; the next real utterance still registers.
                 if (AgentService.isRunning) {
                     Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
-                    visualFeedbackManager.hideTranscription()
                     deltaStateManager.setState(DeltaState.IDLE)
                     return@startListening
                 }
@@ -524,7 +474,6 @@ class ConversationalAgentService : Service() {
                 }
                 firebaseAnalytics.logEvent("stt_error", sttErrorBundle)
                 
-                visualFeedbackManager.hideTranscription()
                 sttErrorAttempts++
                 serviceScope.launch {
                     if (sttErrorAttempts >= maxSttErrorAttempts) {
@@ -539,14 +488,12 @@ class ConversationalAgentService : Service() {
             },
             onPartialResult = { partialText ->
                 if (isTextModeActive) return@startListening // Ignore errors in text mode
-                visualFeedbackManager.updateTranscription(partialText)
             },
             onListeningStateChange = { listening ->
                 Log.d("ConvAgent", "Listening state: $listening")
                 if (listening) {
                     if (isTextModeActive) return@startListening // Ignore errors in text mode
                     deltaStateManager.setState(DeltaState.LISTENING)
-                    visualFeedbackManager.showTranscription()
                 } else {
                     if (!isTextModeActive) {
                         deltaStateManager.setState(DeltaState.IDLE)
@@ -555,67 +502,6 @@ class ConversationalAgentService : Service() {
             }
         )
     }
-
-    // START: ADD THESE NEW METHODS AT THE END OF THE CLASS, before onDestroy()
-    private fun showTranscriptionView() {
-        if (transcriptionView != null) return // Already showing
-
-        mainHandler.post {
-            transcriptionView = TextView(this).apply {
-                text = "Listening..."
-                val glassBackground = GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xDD0D0D2E.toInt(), 0xDD2A0D45.toInt())
-                ).apply {
-                    cornerRadius = 28f
-                    setStroke(1, 0x80FFFFFF.toInt())
-                }
-                background = glassBackground
-                setTextColor(0xFFE0E0E0.toInt())
-                textSize = 16f
-                setPadding(40, 24, 40, 24)
-                typeface = Typeface.MONOSPACE
-            }
-
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = 250 // Position it 250px above the bottom edge
-            }
-
-            try {
-                windowManager.addView(transcriptionView, params)
-            } catch (e: Exception) {
-                Log.e("ConvAgent", "Failed to add transcription view.", e)
-                transcriptionView = null
-            }
-        }
-    }
-
-    private fun updateTranscriptionView(text: String) {
-        transcriptionView?.text = text
-    }
-
-    private fun hideTranscriptionView() {
-        mainHandler.post {
-            transcriptionView?.let {
-                if (it.isAttachedToWindow) {
-                    try {
-                        windowManager.removeView(it)
-                    } catch (e: Exception) {
-                        Log.e("ConvAgent", "Error removing transcription view.", e)
-                    }
-                }
-            }
-            transcriptionView = null
-        }
-    }
-
 
     // --- CHANGED: Rewritten to process the new custom text format ---
     @RequiresApi(Build.VERSION_CODES.R)
@@ -642,7 +528,6 @@ class ConversationalAgentService : Service() {
             // inside its own coroutine, so the line would arrive late and out of order.
             AssistantSessionState.userInput(userInput)
             AssistantSessionState.setThinking(true)
-            removeClarificationQuestions()
             updateSystemPromptWithAgentStatus()
             updateSystemPromptWithScreenContext()
             updateSystemPromptWithTime()
@@ -679,7 +564,6 @@ class ConversationalAgentService : Service() {
                     return@launch
                 }
                 deltaStateManager.setState(DeltaState.PROCESSING)
-                visualFeedbackManager.showThinkingIndicator()
                 val defaultJsonResponse = """{"Type": "Reply", "Reply": "I'm sorry, I had an issue.", "Instruction": "", "Should End": "Continue"}"""
                 // A plain "open <app>" request is deterministic: the agent resolves
                 // and launches the app without reading the screen, so the reasoning
@@ -699,7 +583,6 @@ class ConversationalAgentService : Service() {
                 } else {
                     getReasoningModelApiResponse(conversationHistory) ?: defaultJsonResponse
                 }
-                visualFeedbackManager.hideThinkingIndicator()
                 val decision = parseModelResponse(rawModelResponse)
                 Log.d("TTS_DEBUG", "Reply received from GeminiApi: -->${rawModelResponse}<--")
                 when (decision.type) {
@@ -727,7 +610,6 @@ class ConversationalAgentService : Service() {
 
                         Log.d("ConvAgent", "Model identified a task. Checking for clarification...")
                         // --- NEW: Check if the task instruction needs clarification ---
-                        removeClarificationQuestions()
                         if(freemiumManager.canPerformTask()){
                             Log.d("ConvAgent", "Allowance check passed. Proceeding with task.")
 
@@ -747,7 +629,6 @@ class ConversationalAgentService : Service() {
                                     firebaseAnalytics.logEvent("task_clarification_needed", clarificationBundle)
                                     
                                     clarificationAttempts++
-                                    displayClarificationQuestions(questions)
                                     val questionToAsk =
                                         "I can help with that, but first: ${questions.joinToString(" and ")}"
                                     Log.d(
@@ -1321,121 +1202,6 @@ class ConversationalAgentService : Service() {
         }
     }
 
-    /**
-     * Displays a list of futuristic-styled clarification questions at the top of the screen.
-     * Each question animates in from the top with a fade-in effect.
-     *
-     * @param questions The list of question strings to display.
-     */
-    private fun displayClarificationQuestions(questions: List<String>) {
-        mainHandler.post {
-            // First, remove any questions that might already be on screen
-
-            val topMargin = 100 // Base margin from the very top of the screen
-            val verticalSpacing = 20 // Space between question boxes
-            var accumulatedHeight = 0 // Tracks the vertical space used by previous questions
-
-            questions.forEachIndexed { index, questionText ->
-                // 1. Create and style the TextView
-                val textView = TextView(this).apply {
-                    text = questionText
-                    // --- (Your existing styling code is perfect, no changes needed here) ---
-                    val glowEffect = GradientDrawable(
-                        GradientDrawable.Orientation.BL_TR,
-                        intArrayOf("#BE63F3".toColorInt(), "#5880F7".toColorInt())
-                    ).apply { cornerRadius = 32f }
-
-                    val glassBackground = GradientDrawable(
-                        GradientDrawable.Orientation.TL_BR,
-                        intArrayOf(0xEE0D0D2E.toInt(), 0xEE2A0D45.toInt())
-                    ).apply {
-                        cornerRadius = 28f
-                        setStroke(1, 0x80FFFFFF.toInt())
-                    }
-
-                    val layerDrawable = LayerDrawable(arrayOf(glowEffect, glassBackground)).apply {
-                        setLayerInset(1, 4, 4, 4, 4)
-                    }
-                    background = layerDrawable
-                    setTextColor(0xFFE0E0E0.toInt())
-                    textSize = 15f
-                    setPadding(40, 24, 40, 24)
-                    typeface = Typeface.MONOSPACE
-                }
-
-                textView.measure(
-                    View.MeasureSpec.makeMeasureSpec((windowManager.defaultDisplay.width * 0.9).toInt(), View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-                )
-                val viewHeight = textView.measuredHeight
-
-                // B. Pre-calculate the final Y position using the current accumulated height.
-                val finalYPosition = topMargin + accumulatedHeight
-
-                // C. Update accumulatedHeight for the *next* view in the loop.
-                accumulatedHeight += viewHeight + verticalSpacing
-                // **--- END OF FIX ---**
-
-
-                // 2. Prepare layout params
-                val params = WindowManager.LayoutParams(
-                    (windowManager.defaultDisplay.width * 0.9).toInt(), // 90% of screen width
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                    PixelFormat.TRANSLUCENT
-                ).apply {
-                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    // Initial animation state: off-screen at the top and fully transparent
-                    y = -viewHeight // Start above the screen
-                    alpha = 0f
-                }
-
-                // 3. Add the view and start the animation
-                try {
-                    windowManager.addView(textView, params)
-                    clarificationQuestionViews.add(textView)
-
-                    // Animate the view from its starting position to the calculated finalYPosition
-                    val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                        duration = 500L
-                        startDelay = (index * 150).toLong() // Stagger animation
-
-                        addUpdateListener { animation ->
-                            val progress = animation.animatedValue as Float
-                            // Animate Y position from its off-screen start to its final place
-                            params.y = (finalYPosition * progress - viewHeight * (1 - progress)).toInt()
-                            params.alpha = progress
-                            windowManager.updateViewLayout(textView, params)
-                        }
-                    }
-                    animator.start()
-
-                } catch (e: Exception) {
-                    Log.e("ConvAgent", "Failed to display futuristic clarification question.", e)
-                }
-            }
-        }
-    }
-
-    /**
-     * Removes all currently displayed clarification questions from the screen.
-     */
-    private fun removeClarificationQuestions() {
-        mainHandler.post {
-            clarificationQuestionViews.forEach { view ->
-                if (view.isAttachedToWindow) {
-                    try {
-                        windowManager.removeView(view)
-                    } catch (e: Exception) {
-                        Log.e("ConvAgent", "Error removing clarification view.", e)
-                    }
-                }
-            }
-            clarificationQuestionViews.clear()
-        }
-    }
-
     private suspend fun gracefulShutdown(exitMessage: String? = null, endReason: String = "graceful") {
         // Track graceful shutdown
         val shutdownBundle = android.os.Bundle().apply {
@@ -1451,10 +1217,6 @@ class ConversationalAgentService : Service() {
 
         trackConversationEnd(endReason)
         
-        visualFeedbackManager.hideTtsWave()
-        visualFeedbackManager.hideTranscription()
-        visualFeedbackManager.hideSpeakingOverlay()
-        visualFeedbackManager.hideInputBox()
 
         if (exitMessage != null) {
                 speechCoordinator.speakText(exitMessage)
@@ -1490,14 +1252,8 @@ class ConversationalAgentService : Service() {
         withContext(Dispatchers.Main) {
             speechCoordinator.stopSpeaking()
             speechCoordinator.stopListening()
-            visualFeedbackManager.hideTtsWave()
-            visualFeedbackManager.hideTranscription()
-            visualFeedbackManager.hideSpeakingOverlay()
-            visualFeedbackManager.hideInputBox()
-            removeClarificationQuestions()
         }
 
-        removeClarificationQuestions()
         // Make a thread-safe copy of the conversation history.
         // Removed old memory extraction logic
         triggerMemoryGeneration()
@@ -1638,19 +1394,13 @@ class ConversationalAgentService : Service() {
             trackConversationEnd("service_destroyed")
         }
         
-        removeClarificationQuestions()
         serviceScope.cancel()
         isRunning = false
         
         // Stop state monitoring and set final state
         deltaStateManager.setState(DeltaState.IDLE)
         deltaStateManager.stopMonitoring()
-        visualFeedbackManager.hideSmallDeltaGlow()
-        visualFeedbackManager.hideSpeakingOverlay() // <-- ADD THIS LINE
         // USE the new manager to hide the wave and transcription view
-        visualFeedbackManager.hideTtsWave()
-        visualFeedbackManager.hideTranscription()
-        visualFeedbackManager.hideInputBox()
 
     }
 

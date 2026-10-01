@@ -27,7 +27,6 @@ class DeltaStateManager private constructor(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val speechCoordinator by lazy { SpeechCoordinator.getInstance(context) }
-    private val visualFeedbackManager by lazy { VisualFeedbackManager.getInstance(context) }
     
     // State management
     private var currentState: DeltaState = DeltaState.IDLE

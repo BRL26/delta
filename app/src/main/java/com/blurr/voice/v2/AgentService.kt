@@ -18,7 +18,6 @@ import com.blurr.voice.api.Eyes
 import com.blurr.voice.api.Finger
 import com.blurr.voice.api.LlmProviderStore
 import com.blurr.voice.overlay.OverlayDispatcher
-import com.blurr.voice.utilities.VisualFeedbackManager
 import com.blurr.voice.overlay.OverlayManager
 import com.blurr.voice.v2.actions.ActionExecutor
 import com.blurr.voice.v2.fs.FileSystem
@@ -54,7 +53,6 @@ class AgentService : Service() {
     // A dedicated coroutine scope tied to the service's lifecycle.
     // Using a SupervisorJob ensures that if one child coroutine fails, it doesn't cancel the whole scope.
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val visualFeedbackManager by lazy { VisualFeedbackManager.getInstance(this) }
 
     // Declare agent and its dependencies. They will be initialized in onCreate.
     private val taskQueue: Queue<String> = ConcurrentLinkedQueue()
@@ -121,7 +119,6 @@ class AgentService : Service() {
         OverlayDispatcher.clearAll()
         overlayManager.startObserving()
 
-        visualFeedbackManager.showTtsWave()
         createNotificationChannel()
 
         settings = AgentSettings() // Use default settings for now
@@ -237,7 +234,6 @@ class AgentService : Service() {
         currentTask = null
         taskQueue.clear()
         serviceScope.cancel()
-        visualFeedbackManager.hideTtsWave()
         Log.i(TAG, "Service destroyed and all resources cleaned up.")
     }
 

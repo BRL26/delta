@@ -26,24 +26,6 @@ class Finger(private val context: Context) {
         }
 
     /**
-     * Starts the ChatActivity within the app using a standard Android Intent.
-     */
-    fun goToChatRoom(message: String) {
-        Log.d(TAG, "Opening ChatActivity with message: $message")
-        try {
-            val intent = Intent().apply {
-                // Use the app's own context to find the activity class
-                setClassName(context, "com.blurr.app.ChatActivity")
-                putExtra("custom_message", message)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start ChatActivity. Make sure it's defined in your AndroidManifest.xml", e)
-        }
-    }
-
-    /**
      * Opens an app directly using package manager (requires QUERY_ALL_PACKAGES permission).
      * This method is intended for debugging purposes only and should be disabled in production.
      * 

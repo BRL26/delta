@@ -24,6 +24,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.android.billingclient.api.*
+import com.blurr.voice.assistant.AssistantRoleService
 import com.blurr.voice.v2.AgentService
 import com.blurr.voice.utilities.AuthGate
 import com.blurr.voice.utilities.FreemiumManager
@@ -231,14 +232,18 @@ class MainActivity : BaseNavigationActivity() {
     }
 
     private fun startConversationalAgent() {
-        if (!ConversationalAgentService.isRunning) {
-            val serviceIntent = Intent(this, ConversationalAgentService::class.java)
-            ContextCompat.startForegroundService(this, serviceIntent)
-            Toast.makeText(this, "Delta is waking up...", Toast.LENGTH_SHORT).show()
-        } else {
-            Logger.d("MainActivity", "ConversationalAgentService is already running.")
-            Toast.makeText(this, "Delta is already awake!", Toast.LENGTH_SHORT).show()
-        }
+        // The popup, through the same code path the power-button gesture and the key
+        // use. There is deliberately no second front end any more: the service's own
+        // overlays -- the "Listening..." bubble, the input box, the thinking indicator,
+        // the clarification cards -- are all gone, so starting the service without a
+        // session window would leave the user with a running microphone and nothing on
+        // screen to talk to.
+        if (AssistantRoleService.showAssistantPopup()) return
+
+        // Not the assistant role holder, so there is no session window to show. Asking
+        // for the role is the only honest answer: without it the platform will not give
+        // this app a popup, and the request has nowhere to land.
+        startActivity(Intent(this, RoleRequestActivity::class.java))
     }
 
     override fun onNewIntent(intent: Intent) {

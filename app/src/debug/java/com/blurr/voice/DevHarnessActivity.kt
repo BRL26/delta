@@ -117,7 +117,6 @@ class DevHarnessActivity : Activity() {
         // Lets a build verify the overlays without anyone touching the screen,
         // which matters when the test device is locked:
         //   am start -n .../DevHarnessActivity --ez autopill true
-        //   am start -n .../DevHarnessActivity --ez autoinput true
         if (intent?.getBooleanExtra("autopill", false) == true) {
             val overlay = OverlayManager.getInstance(this)
             overlay.startObserving()
@@ -132,18 +131,10 @@ class DevHarnessActivity : Activity() {
             Log.d(TAG, "autopill: requested")
         }
 
-        if (intent?.getBooleanExtra("autoinput", false) == true) {
-            // TextInputLayout is inflated from a Service context here, which is
-            // the real code path. Material widgets need a Material theme or they
-            // throw at inflation, so this is worth exercising.
-            com.blurr.voice.utilities.VisualFeedbackManager.getInstance(this)
-                .showInputBox(
-                    onSubmit = { Log.d(TAG, "input submitted: $it") },
-                    onActivated = { Log.d(TAG, "input activated") },
-                    onOutsideTap = { Log.d(TAG, "input outside tap") }
-                )
-            Log.d(TAG, "autoinput: requested")
-        }
+        // The "autoinput" harness exercised the service's own overlay text composer.
+        // That composer is gone: text input now happens in the assistant popup, and
+        // there is nothing left in the app that inflates a TextInputLayout from a
+        // Service context, so there is nothing here for the harness to exercise.
 
         if (intent?.getBooleanExtra("dumptree", false) == true) {
             // Measures the pill off-screen and logs its view tree. The pill is

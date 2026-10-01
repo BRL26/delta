@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.blurr.voice.assistant.AssistantRoleService
 
 /**
@@ -52,19 +51,16 @@ class AssistEntryActivity : Activity() {
             return
         }
 
-        // No role held: fall back to the previous behaviour, which starts the
-        // conversational service and lets it open the microphone. This is the path that
-        // works before the user has ever picked blurr as their assistant, which is
-        // exactly when they are most likely to be testing the assist key.
-        if (!ConversationalAgentService.isRunning) {
-            val serviceIntent = Intent(this, ConversationalAgentService::class.java).apply {
-                action = "com.blurr.voice.ACTION_START_FROM_ASSIST"
-                putExtra("source", "assist_gesture")       // optional metadata
-            }
-            ContextCompat.startForegroundService(this, serviceIntent)
-        } else {
-            // e.g., tell the service to bring its overlay/mic UI to front
-            sendBroadcast(Intent("com.blurr.voice.ACTION_SHOW_OVERLAY"))
-        }
+        // No role held, so there is no session window for the platform to give us and
+        // no popup to draw. The old fallback started the conversational service and let
+        // it paint its own overlay UI; that UI is gone, so the request now goes where it
+        // can actually be answered -- the "make Delta your assistant" screen.
+        Log.i("AssistEntryActivity", "Assistant role not held; asking for it.")
+        runCatching {
+            startActivity(
+                Intent(this, RoleRequestActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { Log.w("AssistEntryActivity", "Could not open the role request", it) }
     }
 }
