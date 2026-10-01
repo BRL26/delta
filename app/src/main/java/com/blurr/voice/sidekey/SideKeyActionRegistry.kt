@@ -39,6 +39,9 @@ object SideKeyActionRegistry {
     /** The stored id that means "this press does nothing". */
     const val NONE_ID = "none"
 
+    /** Stored id for [OPEN_ASSISTANT]. */
+    const val OPEN_ASSISTANT_ID = "open_assistant"
+
     /** Stored id for [CIRCLE_TO_SEARCH]. */
     const val CIRCLE_TO_SEARCH_ID = "circle_to_search"
 
@@ -68,6 +71,23 @@ object SideKeyActionRegistry {
     )
 
     /**
+     * Delta's own popup, opened through the platform's real entry point:
+     * [com.blurr.voice.assistant.AssistantRoleService] is what the power-button
+     * gesture and MainActivity both use, so the key lands in the same conversation
+     * window they do rather than a second front end.
+     *
+     * The popup exists only while this app holds the assistant role. When it does
+     * not, there is no window to show, and the press opens the screen that asks for
+     * the role instead -- the honest answer, because silently doing nothing would
+     * look like a broken key.
+     */
+    val OPEN_ASSISTANT = SideKeyActionSpec(
+        id = OPEN_ASSISTANT_ID,
+        label = "Delta assistant",
+        description = "Opens Delta's popup over whatever you are doing, ready to talk. If Delta is not your phone's assistant yet, the press asks for that instead."
+    )
+
+    /**
      * AKS-Labs Circle to Search on whatever is on screen, with the circle.
      *
      * Not a shortcut into AKS' app -- [AksCircleToSearch] taps AKS' own trigger so
@@ -84,7 +104,7 @@ object SideKeyActionRegistry {
      * Google Lens on whatever is on screen: the frame is captured and handed to
      * Lens, which searches it visually.
      *
-     * [CIRCLE_TO_SEARCH] is the better pick and is first in the list. This one is
+     * [CIRCLE_TO_SEARCH] is the better pick and comes first of the two. This one is
      * kept because it works with nothing but the Google app, so it is the fallback
      * for anyone without AKS installed. See [LensScreenSearch] for what it does
      * and does not do.
@@ -143,11 +163,13 @@ object SideKeyActionRegistry {
     /**
      * Picker order: nothing first, then the real actions.
      *
-     * Grouped the way a hand reaches for them -- what is on screen, then what the
-     * phone itself does, then media -- rather than by implementation.
+     * Grouped the way a hand reaches for them -- Delta's own assistant, what is on
+     * screen, then what the phone itself does, then media -- rather than by
+     * implementation.
      */
     val actions: List<SideKeyActionSpec> = listOf(
         NONE,
+        OPEN_ASSISTANT,
         CIRCLE_TO_SEARCH,
         GOOGLE_LENS_SCREEN,
         TOGGLE_FLASHLIGHT,

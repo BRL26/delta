@@ -52,7 +52,6 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.blurr.voice.utilities.ServicePermissionManager
 import com.blurr.voice.utilities.DeltaStateManager
-import com.blurr.voice.ui.voice.VoiceInputController
 import com.blurr.voice.v2.perception.Perception
 import com.blurr.voice.v2.perception.SemanticParser
 import com.google.firebase.firestore.firestore
@@ -1221,13 +1220,6 @@ class ConversationalAgentService : Service() {
         super.onDestroy()
         Log.d("ConvAgent", "Service onDestroy")
         
-        // The assistant mutes the system stream while its microphone is open, to hide the
-        // recognition engine's "listening" tone. The session UI normally restores it, but
-        // the service can be stopped from its own notification with nothing else left
-        // holding the microphone, so this is the backstop that stops the phone being left
-        // with no system sounds.
-        VoiceInputController.restoreSystemSounds(this)
-
         // Backstop for every other way out of this service. The stop action and the
         // graceful path both release the audio hardware before asking to stop, but the
         // service can also be killed by the platform, and cancelling the coroutine scope

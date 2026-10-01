@@ -196,6 +196,7 @@ object SideKeyActionPicker {
 
             // Everything the executor can carry out is tested through the executor,
             // so a test cannot drift from what the key itself would do.
+            SideKeyActionRegistry.OPEN_ASSISTANT_ID,
             SideKeyActionRegistry.TOGGLE_FLASHLIGHT_ID,
             SideKeyActionRegistry.OPEN_QUICK_SETTINGS_ID,
             SideKeyActionRegistry.MEDIA_PLAY_PAUSE_ID,

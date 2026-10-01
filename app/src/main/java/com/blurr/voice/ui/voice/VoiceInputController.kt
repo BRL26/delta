@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -223,15 +222,14 @@ class VoiceInputController(context: Context) {
      * Every path that ends an open microphone funnels through here.
      *
      * It was four near-identical three-line preambles, which is exactly the shape that
-     * goes wrong: a fifth path closes the microphone, forgets one line, and the system
-     * stream stays muted for the rest of the session. One place to be wrong is better than
-     * five.
+     * goes wrong: a fifth path closes the microphone, forgets one line, and a restart
+     * stays queued against a microphone nobody is holding. One place to be wrong is
+     * better than five.
      */
     private fun endKeepAlive() {
         keepAlive = false
         restartQueued = false
         main.removeCallbacksAndMessages(RESTART_TOKEN)
-        restoreSystemSounds(appContext)
         // Hushed is a fact about keepAlive, so it cannot outlive it: turning the
         // microphone off for good is what clears it, not the assistant finishing.
         if (_state.value.hushed) _state.value = _state.value.copy(hushed = false)
@@ -295,10 +293,11 @@ class VoiceInputController(context: Context) {
         if (_state.value.listening) return true
 
         keepAlive = true
-        // Before the engine is asked, not after: the tone plays a few hundred milliseconds
-        // after onStartListening, so muting once the first session is already audible
-        // would leave exactly the beep this exists to remove.
-        silenceRecognitionTone(appContext)
+        // The engine's "listening" tone is deliberately left alone. It used to be
+        // silenced by muting the streams it plays on, but those streams carry every
+        // notification and key click on the phone, and a mic-open window that quietly
+        // muted the phone was worse than one beep. The tone plays; nothing else is
+        // touched, ever.
         // listening is set before the engine is asked, and is not cleared again until
         // stop/cancel. That is the whole trick described on the class.
         _state.value = _state.value.copy(listening = true, partial = "", error = null)
@@ -553,7 +552,6 @@ class VoiceInputController(context: Context) {
         keepAlive = false
         restartQueued = false
         main.removeCallbacksAndMessages(RESTART_TOKEN)
-        restoreSystemSounds(appContext)
         runCatching { recognizer?.cancel() }
         _state.value = _state.value.copy(listening = false, partial = "")
         _gaveUp.tryEmit(Unit)
@@ -678,172 +676,6 @@ class VoiceInputController(context: Context) {
 
         const val ERROR_PERMISSION = "permission"
         const val ERROR_UNAVAILABLE = "unavailable"
-
-        /**
-         * The streams that have to go quiet for the tone to be inaudible.
-         *
-         * Two of them because the device gives two contradictory answers about where the
-         * tone lives, and picking the wrong one leaves the beep exactly as audible as
-         * before:
-         *
-         *  - The engine builds the tone as a legacy-stream [android.media.AudioTrack] with
-         *    `streamType = 5`, which is [AudioManager.STREAM_NOTIFICATION]. A legacy
-         *    stream type, not the usage attribute, decides the volume for that track.
-         *  - The same track reports `usage=USAGE_ASSISTANCE_SONIFICATION`, and the audio
-         *    policy's attribute-to-stream table maps that usage to
-         *    [AudioManager.STREAM_SYSTEM].
-         *
-         * Muting only [AudioManager.STREAM_SYSTEM] was tried first, on the strength of that
-         * mapping table, and the tone was still clearly audible. So both, rather than
-         * guessing again and spending another round trip on the user to find out which one
-         * was right. Narrowing this to a single stream is a one-line change once something
-         * can measure which of the two actually carries it.
-         */
-        private val ToneStreams = intArrayOf(
-            AudioManager.STREAM_NOTIFICATION,
-            AudioManager.STREAM_SYSTEM,
-        )
-
-        /**
-         * Which of [ToneStreams] this class muted, so that exactly those are restored and
-         * a stream the user had muted themselves is left alone.
-         *
-         * Process-wide rather than per controller, deliberately. The streams are device
-         * settings, so two controllers disagreeing about them would leave them muted after
-         * one of them closed, and the record has to survive being called from a service
-         * that has no controller to ask. Static for the same reason: the app is a single
-         * process, and a controller-scoped flag would not be visible to the backstop in
-         * `ConversationalAgentService.onDestroy`.
-         */
-        private val toneMutedStreams = mutableSetOf<Int>()
-
-        /**
-         * Mutes the streams the recognition engine's "listening" tone is played on, for as
-         * long as the microphone is open.
-         *
-         * The tone is not ours and there is no way to switch it off at the source. When
-         * `SpeechRecognizer` opens a session, the engine this device happens to use (the
-         * Google recogniser, which is also the TTS engine) plays a short confirmation tone,
-         * a few hundred milliseconds after each `onStartListening`. No extra on
-         * [android.speech.RecognizerIntent] disables it, and it is not a notification, so
-         * silencing the notification channels does nothing to it -- which is why the
-         * version of this that treated it as one was wrong.
-         *
-         * It is also worse than a single beep. The engine session ends after every
-         * utterance and is re-asked for, so keeping the microphone open means the tone
-         * returns every few seconds for as long as the user is talking. Muted for the whole
-         * life of the open microphone rather than per session, which fixes the repeats and
-         * the first one together.
-         *
-         * The cost, stated plainly: [ToneStreams] also carry notification sounds, key
-         * clicks, lock screen feedback and the volume-adjust tone, so those go quiet while
-         * the assistant's microphone is open. That window is a modal overlay the user
-         * opened on purpose and it closes itself after nine seconds of silence, and there
-         * is no per-session or per-usage volume to narrow it to. The alternative is one
-         * tone per utterance.
-         *
-         * Needs `MODIFY_AUDIO_SETTINGS`, which is a normal permission, so there is nothing
-         * to request at runtime.
-         */
-        @Synchronized
-        @JvmStatic
-        fun silenceRecognitionTone(context: Context) {
-            val app = context.applicationContext
-            // A session starting cancels a restore that was waiting out the end of the
-            // previous one. Without this, opening the assistant again inside the delay
-            // window would unmute the streams out from under a live microphone.
-            mainHandler.removeCallbacks(pendingToneRestore)
-            if (toneMutedStreams.isNotEmpty()) return
-            val audio = app.getSystemService(AudioManager::class.java) ?: return
-            for (stream in ToneStreams) {
-                // Already muted, most likely by the user, who is entitled to that. Left out
-                // of the record so it is not unmuted later: undoing a mute the app did not
-                // apply is the app overruling the user's volume setting.
-                if (audio.isStreamMute(stream)) continue
-                audio.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
-                toneMutedStreams += stream
-            }
-            if (toneMutedStreams.isNotEmpty()) toneAppContext = app
-        }
-
-        /**
-         * Undoes [silenceRecognitionTone], and the backstop for a session that ends without
-         * the controller being told.
-         *
-         * Safe to call from anywhere and as often as anything likes: it only ever unmutes
-         * a stream that this class muted. The service calls it on the way out so a
-         * conversation stopped by the notification's Stop button, a crash in the UI layer
-         * or a swipe away from recents cannot leave the phone with no system sounds.
-         *
-         * Deferred by [ToneRestoreDelayMillis] rather than done immediately, and that
-         * delay is the whole reason the closing sound exists. There are two sounds around a
-         * conversation and only one of them comes from the recogniser. The opening one is
-         * the engine's tone and is gone as soon as the streams are muted. The closing one
-         * is not: it arrives *after* the session ends, from outside the app, and it is
-         * already over by the time any log line mentions it -- capturing a full open/close
-         * cycle shows every scrap of recogniser audio finishing before the close and
-         * nothing at all afterwards, which is the signature of a `SoundPool` chime rather
-         * than an `AudioTrack`. Unmuting in the same breath as the close therefore un-mutes
-         * straight into it.
-         *
-         * Nothing in the app plays it, so the only handle on it is being quiet for slightly
-         * longer than the session. A second and a half covers a chime that is already
-         * starting when the session ends, and costs the user nothing they can perceive --
-         * they are done talking and the overlay is on its way out.
-         *
-         * The one gap is the process being killed outright, which skips every cleanup path
-         * and leaves the streams muted until something restores them. Accepted rather than
-         * papered over with a marker in shared preferences, because a persisted mute flag
-         * that disagrees with reality is worse than the narrow case it would fix.
-         */
-        @Synchronized
-        @JvmStatic
-        fun restoreSystemSounds(context: Context) {
-            if (toneMutedStreams.isEmpty()) return
-            toneAppContext = context.applicationContext
-            mainHandler.removeCallbacks(pendingToneRestore)
-            mainHandler.postDelayed(pendingToneRestore, ToneRestoreDelayMillis)
-        }
-
-        /** The actual unmute, run on the main looper once [ToneRestoreDelayMillis] is up. */
-        @Synchronized
-        private fun unmuteToneStreams() {
-            val app = toneAppContext
-            val muted = toneMutedStreams
-            toneAppContext = null
-            if (app != null && muted.isNotEmpty()) {
-                app.getSystemService(AudioManager::class.java)?.let { audio ->
-                    for (stream in muted) {
-                        audio.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0)
-                    }
-                }
-            }
-            muted.clear()
-        }
-
-        /**
-         * How long the streams stay muted after the microphone closes.
-         *
-         * Long enough to cover the closing chime, which is already sounding by the time
-         * the session ends. See [restoreSystemSounds].
-         */
-        private const val ToneRestoreDelayMillis = 1_500L
-
-        /**
-         * Where the delayed unmute is posted. On the main looper because that is where the
-         * session lifecycle already runs, and so that a restore posted from the service's
-         * `onDestroy` on a background thread still executes.
-         */
-        private val mainHandler = Handler(Looper.getMainLooper())
-
-        /**
-         * The application context the delayed unmute needs, captured at mute time. Held
-         * rather than passed into the runnable so there is only ever one pending restore,
-         * which is what makes cancelling it on a new session correct.
-         */
-        private var toneAppContext: Context? = null
-
-        private val pendingToneRestore = Runnable { unmuteToneStreams() }
 
         /**
          * Marker for the queued restarts, so [stop] can cancel a pending one without

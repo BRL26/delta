@@ -18,12 +18,30 @@ a clean **delta** identity.
 
 ---
 
+## What's new in v1.0114.03
+
+- **🎙️ The key can open the assistant.** *Delta assistant* joins the Essential Key's
+  action list: any press type can raise the same popup the power-button gesture uses —
+  or, when Delta is not the phone's assistant yet, the screen that asks for the role.
+- **🔕 The app never mutes your phone.** While the microphone was open the app muted
+  the notification and system streams to hide the recogniser's beep, taking every
+  notification and key click with them — and a killed process could leave the phone
+  muted for good. That code and its `MODIFY_AUDIO_SETTINGS` permission are gone: the
+  beep is back, your sound settings stay yours.
+- **🛠 Two crashes fixed.** Opening a press row in Settings crashed the app
+  (`ViewTreeLifecycleOwner not found`), and because everything runs in one process each
+  crash left the accessibility service unbound — which is why the key then did nothing.
+  A destroyed assistant session could crash the same way on a late restore.
+
+---
+
 ## What's new in v1.0114.02
 
 - **🔺 The Essential Key is a real remote.** All four press types — single, double,
-  triple and long press — map to an action from one registry: Circle to Search, Google
-  Lens, **flashlight**, **quick settings**, **play/pause and track skipping**, or *open
-  any app* / *open any link* you pick. The picker is a themed sheet with a description
+  triple and long press — map to an action from one registry: *open the Delta
+  assistant*, Circle to Search, Google Lens, **flashlight**, **quick settings**,
+  **play/pause and track skipping**, or *open any app* / *open any link* you pick. The
+  picker is a themed sheet with a description
   under every action and a **Test it** button that runs the choice before you save it.
 - **One front end for the assistant.** The popup is now the only owner of a
   conversation; the floating overlay system and the legacy assistant UI are deleted, so
@@ -122,9 +140,10 @@ doesn't secretly break reflection-based code paths.
 * 📢 **Voice-first conversation** — talk to it like an operator; it listens, acts, and
   speaks back. No tap-to-talk needed.
 * 🔑 **Essential Key** — the Nothing side key becomes a configurable remote: four press
-  types, each mapped to an action from one list (search the screen with Circle to Search
-  or Lens, toggle the flashlight, open quick settings, control playback, or open a
-  chosen app or link), with a Test button that runs the choice before you save it.
+  types, each mapped to an action from one list (open the assistant, search the screen
+  with Circle to Search or Lens, toggle the flashlight, open quick settings, control
+  playback, or open a chosen app or link), with a Test button that runs the choice
+  before you save it.
 * ⏰ **Triggers** — start tasks from a scheduled time, an incoming notification, a
   launcher shortcut, a widget, or the assistant gesture.
 * 💾 **Local memory** — ⚠️ currently disabled (see `docs/MEMORY_STATUS.md`).

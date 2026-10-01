@@ -1,8 +1,11 @@
 package com.blurr.voice.sidekey
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.util.Log
+import com.blurr.voice.RoleRequestActivity
 import com.blurr.voice.ScreenInteractionService
+import com.blurr.voice.assistant.AssistantRoleService
 
 /**
  * Runs a [SideKeyActionSpec] against the live [service].
@@ -38,6 +41,8 @@ object SideKeyActionExecutor {
         return when (action.id) {
             SideKeyActionRegistry.NONE_ID -> true
 
+            SideKeyActionRegistry.OPEN_ASSISTANT_ID -> showAssistant(service)
+
             SideKeyActionRegistry.CIRCLE_TO_SEARCH_ID ->
                 CircleToSearchOutcome.OPENED == AksCircleToSearch.trigger(service)
 
@@ -57,6 +62,32 @@ object SideKeyActionExecutor {
                 Log.w(TAG, "No implementation for action id '${action.id}'")
                 false
             }
+        }
+    }
+
+    /**
+     * Opens the assistant popup through [AssistantRoleService], the platform's own
+     * entry point, so the key joins the same conversation window as the power-button
+     * gesture and MainActivity instead of starting a second front end.
+     *
+     * When this app does not hold the assistant role there is no popup to show, and
+     * the press opens the screen that asks for the role instead -- what
+     * MainActivity does for the same reason: the request has nowhere else to land,
+     * and a key that silently did nothing would read as a broken key.
+     *
+     * @return true when the press produced something on screen.
+     */
+    private fun showAssistant(service: ScreenInteractionService): Boolean {
+        if (AssistantRoleService.showAssistantPopup()) return true
+        return runCatching {
+            service.startActivity(
+                Intent(service, RoleRequestActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        }.getOrElse { error ->
+            Log.w(TAG, "Could not open the assistant or ask for the role", error)
+            false
         }
     }
 }

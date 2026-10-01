@@ -4,10 +4,12 @@ Official release artifacts.
 
 | File | Version | Notes |
 |---|---|---|
-| `delta-1.0114.02-signed.apk` | 1.0114.02 (versionCode 115) | **Primary artifact — release-signed** (RSA-2048, self-signed 20,000-day cert, CN=Delta). Installs directly on Android, and over 1.0114.01 without data loss. Unminified (R8 off). |
-| `delta-1.0114.02.apk` | 1.0114.02 (versionCode 115) | Unsigned release build, kept for archive/re-signing. |
-| `delta-1.0114.01-signed.apk` | 1.0114.01 (versionCode 114) | Previous release, signed. |
-| `delta-1.0114.01.apk` | 1.0114.01 (versionCode 114) | Previous release, unsigned. |
+| `delta-1.0114.03-signed.apk` | 1.0114.03 (versionCode 116) | **Primary artifact — release-signed** (RSA-2048, self-signed 20,000-day cert, CN=Delta). Installs directly on Android, and over 1.0114.02 without data loss. Unminified (R8 off). |
+| `delta-1.0114.03.apk` | 1.0114.03 (versionCode 116) | Unsigned release build, kept for archive/re-signing. |
+| `delta-1.0114.02-signed.apk` | 1.0114.02 (versionCode 115) | Previous release, signed. |
+| `delta-1.0114.02.apk` | 1.0114.02 (versionCode 115) | Previous release, unsigned. |
+| `delta-1.0114.01-signed.apk` | 1.0114.01 (versionCode 114) | Older release, signed. |
+| `delta-1.0114.01.apk` | 1.0114.01 (versionCode 114) | Older release, unsigned. |
 | `SHA256SUMS` | — | Checksums for every artifact in this folder. |
 
 Verify with:
@@ -18,7 +20,7 @@ sha256sum -c SHA256SUMS
 
 ## About the signature
 
-- `delta-1.0114.02-signed.apk` is signed with Delta's **release key**, the same key
+- `delta-1.0114.03-signed.apk` is signed with Delta's **release key**, the same key
   generated at the 1.0114.01 release — which is why it installs as an update rather than
   asking to be uninstalled first. Install it with `adb install` or by tapping the APK on
   the device.

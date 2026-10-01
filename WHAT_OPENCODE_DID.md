@@ -14,6 +14,10 @@ the owner tested, and iterate until each behaviour matched what was asked.
 > session with a different agent (Buffy, of Freebuff) working with the same owner. It is
 > recorded here because this file is the project's development record, not a record of
 > one tool — and because the state it was found in is part of the story.
+>
+> **Note on §10.** Section 10 covers **v1.0114.03**, written by Buffy (Freebuff) with
+> the same owner: a crash that presented as a freeze, a new key action, and the end of
+> the app muting the phone while it listened.
 
 ---
 
@@ -332,5 +336,89 @@ the ids -- but none of it had ever been compiled, tested, or run on a phone.
 
 ---
 
-*Written by OpenCode and the project owner, September 2026. Section 9 added by a
-follow-up session with Buffy (Freebuff) and the project owner.*
+## 10. The dialog crash, an assistant action, and never muting again (v1.0114.03)
+
+**Asks, in order:** *"the essential key function doesn't work — opening it in settings
+freezes and the essential button does nothing"*, then *"add another functionality to the
+key to start the assistant"*, then *"stop the app from always muting my sound when I open
+it… never let it mute, ever."*
+
+### 10.1 The "freeze" was a crash, and the dead key was its fallout
+
+Reproduced on the device: tapping a press row in Settings threw
+`java.lang.IllegalStateException: ViewTreeLifecycleOwner not found from ComposeView` and
+took the process down — the system crash dialog is what read as a freeze.
+
+- **Root cause.** `SideKeyActionPicker.show` hosts the sheet in a plain
+  `android.app.Dialog`, and such a window installs none of the ViewTree owners.
+  `ComposeView` resolves all three when it attaches and throws without them. The view
+  now receives the activity's Lifecycle/ViewModelStore/SavedState owners before it
+  attaches — the arrangement `AssistantSession` already used for its popup — and
+  `show()` takes `AppCompatActivity`, so the signature promises the owners instead of
+  casting for them.
+- **Why the key did nothing afterwards.** Everything runs in one process, so every
+  crash left `ScreenInteractionService` in the system's *Crashed services* list,
+  unbound, with no key events arriving at all. `dumpsys accessibility` showed exactly
+  that, and Settings agreed: *"On, but Delta's accessibility service is not connected."*
+- **A second crash killed it the same way.** `AssistantSession.onHide()` posts
+  `owners.onStart()` for a restore; when the session was destroyed inside that window
+  it moved a DESTROYED `LifecycleRegistry` to `STARTED`. `SessionOwners.onStart()` now
+  returns early once destroyed, the guard `onStop()` already had.
+
+### 10.2 New action: open the assistant
+
+- `SideKeyActionRegistry.OPEN_ASSISTANT` ("Delta assistant") — one data entry, listed
+  straight after *Do nothing*, so the picker, the settings rows and **Test it** pick it
+  up with no further changes.
+- `SideKeyActionExecutor` runs it through `AssistantRoleService.showAssistantPopup()`,
+  the platform's own entry point the power-button gesture uses, so the key joins the
+  same conversation window rather than a second front end. Without the assistant role
+  it opens `RoleRequestActivity` — the answer `MainActivity` gives for the same reason,
+  because a key that silently did nothing would read as a broken key.
+
+### 10.3 Never mute, ever
+
+**What was found.** `VoiceInputController.silenceRecognitionTone()` muted
+`STREAM_NOTIFICATION` and `STREAM_SYSTEM` for the whole mic-open window to hide the
+recogniser's "listening" tone. Those streams carry notifications, key clicks, lock
+feedback and the volume tone, and the 1.5-second restore was skipped entirely when the
+process was killed — `dumpsys audio` on the device caught the mute live, and the
+manifest carried `MODIFY_AUDIO_SETTINGS` purely for it.
+
+- **Deleted:** the mute, the delayed unmute, the `ToneStreams` record of what was
+  muted, the `ConversationalAgentService.onDestroy` backstop, and the
+  `MODIFY_AUDIO_SETTINGS` permission with its comment documenting the removed code.
+- **Left in place, deliberately:** the recogniser's beep. `start()` now records the
+  decision where the mute used to be called: the tone plays, and nothing else on the
+  phone is ever touched.
+- The app does *not* compensate by unmuting anything — it cannot tell a mute it applied
+  from one the user chose, and overruling the user's mute would be the same bug wearing
+  the opposite hat.
+
+### Verification
+
+- `:app:compileDebugKotlin`, `:app:assembleDebug`, `:app:assembleRelease` green.
+- `:app:testDebugUnitTest` — **97 tests, 0 failures**. The registry's existing tests
+  cover the new action's id uniqueness and round-trip without a new case.
+- Debug build installed on the physical device via `scripts/install-device.sh`:
+  accessibility service bound, `Crashed services` empty, Settings reads *"On. Each press
+  runs what you mapped it to."*, `dumpsys audio` shows nothing muted.
+
+### Release (v1.0114.03)
+
+- `version.properties`: `VERSION_CODE=116`, `VERSION_NAME=1.0114.03`, produced by the
+  project's own `incrementVersion` task.
+- **The increment runs at execution time while the version is read at configuration
+  time**, so `assembleRelease` packages whatever the file said when it started: the
+  first build bumped the file to 1.0114.03 but still emitted a 1.0114.02 APK. The
+  rebuild ran with `-x incrementVersion` to produce an APK matching the already-
+  incremented file. Worth knowing for the next release, or worth fixing in the task.
+- `releases/delta-1.0114.03-signed.apk` signed with the same release key (`apksigner
+  verify` clean, `CN=Delta`), the unsigned build archived beside it with its `META-INF`
+  signature stripped and re-zipaligned, `SHA256SUMS` extended to all six artifacts, and
+  `releases/release-notes-1.0114.03.md` is what the GitHub Release ships as its notes.
+
+---
+
+*Written by OpenCode and the project owner, September 2026. Sections 9 and 10 added by
+follow-up sessions with Buffy (Freebuff) and the project owner, September–October 2026.*

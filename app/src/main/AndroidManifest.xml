@@ -15,11 +15,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!--
-        Required to mute and restore AudioManager.STREAM_SYSTEM around an open microphone,
-        which is how the recognition engine's "listening" tone gets silenced. See
-        VoiceInputController.silenceRecognitionTone for the whole story.
+        MODIFY_AUDIO_SETTINGS is deliberately not requested. It used to be here for the
+        code that muted STREAM_NOTIFICATION/STREAM_SYSTEM while the microphone was open,
+        and that code is gone: it silenced every notification and key click on the phone
+        for as long as the assistant listened, which was worse than the recognition
+        engine's beep it existed to hide. Nothing in the app changes audio settings now.
     -->
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
