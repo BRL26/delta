@@ -16,7 +16,12 @@ object VoicePreferenceManager {
         // Ensure this default also matches your intended default (CHIRP_PUCK)
         val selectedVoiceName = sharedPreferences.getString(KEY_SELECTED_VOICE, TTSVoice.CHIRP_LAOMEDEIA.name)
 
-        return TTSVoice.valueOf(selectedVoiceName ?: TTSVoice.CHIRP_LAOMEDEIA.name)
+        // A stored name that is not in the enum means the voice list changed under
+        // it. Degrading to the default keeps Settings open instead of crashing on
+        // the very screen the user would use to fix their choice; the bad value is
+        // overwritten the next time they pick a voice.
+        return runCatching { TTSVoice.valueOf(selectedVoiceName ?: "") }
+            .getOrDefault(TTSVoice.CHIRP_LAOMEDEIA)
     }
 
     fun saveSelectedVoice(context: Context, voice: TTSVoice) {

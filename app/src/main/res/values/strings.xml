@@ -159,4 +159,10 @@
     <!-- Side Key (Essential Key) settings. -->
     <string name="side_key_test">Test the key</string>
     <string name="side_key_info">Assign what each press (single, double, triple, long) should do.</string>
+
+    <!-- Bottom navigation. -->
+    <string name="nav_triggers">Triggers</string>
+    <string name="nav_moments">Moments</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_settings">Settings</string>
 </resources>

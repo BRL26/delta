@@ -6,363 +6,359 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
-import android.view.View
-import android.widget.Button
-import android.widget.NumberPicker
-import android.widget.RadioGroup
-import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import androidx.core.content.edit
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import com.blurr.voice.api.GoogleTts
 import com.blurr.voice.api.TTSVoice
 import com.blurr.voice.sidekey.EssentialKeyMapper
-import android.view.LayoutInflater
+import com.blurr.voice.ui.app.DeltaDestination
+import com.blurr.voice.ui.app.DeltaNav
+import com.blurr.voice.ui.settings.PressMapping
+import com.blurr.voice.ui.settings.SettingsScreen
+import com.blurr.voice.ui.settings.SettingsUiState
+import com.blurr.voice.ui.settings.VoicePickerDialog
+import com.blurr.voice.ui.theme.BlurrTheme
 import com.blurr.voice.utilities.AuthGate
 import com.blurr.voice.utilities.SpeechCoordinator
-import com.blurr.voice.utilities.VoicePreferenceManager
 import com.blurr.voice.utilities.UserProfileManager
+import com.blurr.voice.utilities.VoicePreferenceManager
+import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
-import kotlin.coroutines.cancellation.CancellationException
 
-class SettingsActivity : BaseNavigationActivity() {
+/**
+ * Settings, hosted in Compose.
+ *
+ * The screen itself is [SettingsScreen]; this class owns only the things a
+ * composable cannot own: reading and writing preferences, playing a voice sample,
+ * and starting the Activities the rows point at. Everything visible is state, and
+ * every state change goes through [refresh].
+ *
+ * The old version of this screen was a `ScrollView` of `LinearLayout`s whose cards
+ * were drawn in `@color/background` on a `@color/panel_background` page -- the same
+ * value in night mode, so every card was invisible -- and whose title used one of
+ * six different type sizes in the app. None of that is expressible here: the colours
+ * are [MaterialTheme]'s and the sections come from [com.blurr.voice.ui.app.DeltaCard].
+ */
+class SettingsActivity : AppCompatActivity() {
 
-    private lateinit var ttsVoicePicker: NumberPicker
-    private lateinit var switchShowThoughts: com.google.android.material.switchmaterial.SwitchMaterial
-    private lateinit var switchSideKeyEnabled: com.google.android.material.switchmaterial.SwitchMaterial
-    private lateinit var sideKeyStatusText: TextView
-    private lateinit var sideKeyTestButton: TextView
-    private lateinit var sideKeyPressRows: android.widget.LinearLayout
-    private lateinit var permissionsInfoButton: TextView
-    private lateinit var batteryOptimizationHelpButton: TextView
-    private lateinit var appVersionText: TextView
-    private lateinit var editUserName: android.widget.EditText
-    private lateinit var editUserEmail: android.widget.EditText
-    private lateinit var buttonSignOut: Button
-
-
-    private lateinit var sc: SpeechCoordinator
     private lateinit var sharedPreferences: SharedPreferences
+    private lateinit var sc: SpeechCoordinator
     private lateinit var availableVoices: List<TTSVoice>
     private var voiceTestJob: Job? = null
 
-    companion object {
-        private const val PREFS_NAME = "BlurrSettings"
-        private const val KEY_SELECTED_VOICE = "selected_voice"
-        private const val TEST_TEXT = "Hello, I'm Delta, and this is a test of the selected voice."
-        private val DEFAULT_VOICE = TTSVoice.CHIRP_PUCK
-        const val KEY_SHOW_THOUGHTS = "show_thoughts"
-    }
+    /**
+     * The screen's entire model. Compose reads [ui]`?.value`; this class is the only
+     * writer, through [refresh] and the copies below, so the tree and the prefs
+     * cannot drift apart.
+     */
+    private lateinit var ui: MutableState<SettingsUiState>
+
+    private val voicePickerOpen = mutableStateOf(false)
+    private val signOutConfirmOpen = mutableStateOf(false)
+    private val batteryHelpOpen = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_settings)
 
-        initialize()
-        setupUI()
-        loadAllSettings()
-        setupAutoSavingListeners()
+        sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sc = SpeechCoordinator.getInstance(this)
+        availableVoices = GoogleTts.getAvailableVoices()
+        ui = mutableStateOf(buildState())
+
+        // The Scaffold in DeltaScaffold consumes the window insets and hands them
+        // back to the content; that only means anything if the window is actually
+        // drawn behind the bars.
+        enableEdgeToEdge()
+
+        setContent {
+            BlurrTheme {
+                SettingsContent()
+            }
+        }
+
         cacheVoiceSamples()
     }
 
     override fun onStop() {
         super.onStop()
-        // Stop any lingering voice tests when the user leaves the screen
+        // A voice sample outliving the screen it was previewed from is a noise the
+        // user cannot attribute to anything.
         sc.stop()
         voiceTestJob?.cancel()
     }
 
-    private fun initialize() {
-        sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sc = SpeechCoordinator.getInstance(this)
-        availableVoices = GoogleTts.getAvailableVoices()
+    /** The whole Compose tree, so it reads [ui] in one place and dialogs stay siblings. */
+    @Composable
+    private fun SettingsContent() {
+        val state = ui.value
+
+        SettingsScreen(
+            state = state,
+            onNavigate = { DeltaNav.navigate(this, it) },
+            onVoiceClick = { voicePickerOpen.value = true },
+            onShowThoughtsChange = { checked ->
+                sharedPreferences.edit().putBoolean(KEY_SHOW_THOUGHTS, checked).apply()
+                refresh()
+            },
+            onAiProvidersClick = { startActivity(Intent(this, AiProvidersActivity::class.java)) },
+            onTaskLogsClick = { startActivity(Intent(this, TaskLogsListActivity::class.java)) },
+            onSideKeyEnabledChange = { checked ->
+                EssentialKeyMapper.setEnabled(this, checked)
+                // The status line explains *why* the key may still do nothing when
+                // it is on, so it has to be recomputed with the switch, not once.
+                refresh()
+            },
+            onPressClick = { index -> openPressPicker(index) },
+            onKeyTestClick = {
+                startActivity(Intent(this, com.blurr.voice.sidekey.SideKeyTestActivity::class.java))
+            },
+            onPermissionsClick = { startActivity(Intent(this, PermissionsActivity::class.java)) },
+            onBatteryHelpClick = { batteryHelpOpen.value = true },
+            onSignOutClick = { signOutConfirmOpen.value = true },
+        )
+
+        if (voicePickerOpen.value) {
+            VoicePickerDialog(
+                voices = availableVoices.map { it.displayName },
+                selectedIndex = selectedVoiceIndex(state.voiceName),
+                onSelect = { index ->
+                    voicePickerOpen.value = false
+                    onVoiceChosen(availableVoices[index])
+                },
+                onDismiss = { voicePickerOpen.value = false },
+            )
+        }
+
+        if (batteryHelpOpen.value) {
+            InfoDialog(
+                title = getString(R.string.battery_optimization_title),
+                message = getString(R.string.battery_optimization_message),
+                confirmLabel = getString(R.string.learn_how),
+                onConfirm = {
+                    batteryHelpOpen.value = false
+                    openBatteryOptimizationHelp()
+                },
+                onDismiss = { batteryHelpOpen.value = false },
+            )
+        }
+
+        if (signOutConfirmOpen.value) {
+            InfoDialog(
+                title = "Sign out?",
+                message = "This clears your profile and every setting in the app.",
+                confirmLabel = "Sign out",
+                onConfirm = {
+                    signOutConfirmOpen.value = false
+                    signOut()
+                },
+                onDismiss = { signOutConfirmOpen.value = false },
+            )
+        }
     }
 
-    private fun setupUI() {
-        ttsVoicePicker = findViewById(R.id.ttsVoicePicker)
-        switchShowThoughts = findViewById(R.id.switchShowThoughts)
-        switchSideKeyEnabled = findViewById(R.id.switchSideKeyEnabled)
-        sideKeyStatusText = findViewById(R.id.sideKeyStatusText)
-        sideKeyTestButton = findViewById(R.id.sideKeyTestButton)
-        sideKeyPressRows = findViewById(R.id.sideKeyPressRows)
-        permissionsInfoButton = findViewById(R.id.permissionsInfoButton)
-        appVersionText = findViewById(R.id.appVersionText)
-        batteryOptimizationHelpButton = findViewById(R.id.batteryOptimizationHelpButton)
-
-        buttonSignOut = findViewById(R.id.buttonSignOut)
-
-        editUserName = findViewById(R.id.editUserName)
-        editUserEmail = findViewById(R.id.editUserEmail)
-
-        setupClickListeners()
-        setupVoicePicker()
-
-        // Prefill profile fields from saved values
-        kotlin.runCatching {
-            val pm = UserProfileManager(this)
-            editUserName.setText(pm.getName() ?: "")
-            editUserEmail.setText(pm.getEmail() ?: "")
-        }
-
-        // Show app version
-        val versionName = BuildConfig.VERSION_NAME
-        appVersionText.text = "Version $versionName"
-    }
-
-    private fun setupVoicePicker() {
-        val voiceDisplayNames = availableVoices.map { it.displayName }.toTypedArray()
-        ttsVoicePicker.minValue = 0
-        ttsVoicePicker.maxValue = voiceDisplayNames.size - 1
-        ttsVoicePicker.displayedValues = voiceDisplayNames
-        ttsVoicePicker.wrapSelectorWheel = false
-    }
-
-    private fun setupClickListeners() {
-        permissionsInfoButton.setOnClickListener {
-            val intent = Intent(this, PermissionsActivity::class.java)
-            startActivity(intent)
-        }
-        batteryOptimizationHelpButton.setOnClickListener {
-            showBatteryOptimizationDialog()
-        }
-
-
-        buttonSignOut.setOnClickListener {
-            showSignOutConfirmationDialog()
-        }
-
-        findViewById<TextView>(R.id.viewTaskLogsButton).setOnClickListener {
-            startActivity(Intent(this, TaskLogsListActivity::class.java))
-        }
-
-        findViewById<View>(R.id.aiProvidersButton).setOnClickListener {
-            startActivity(Intent(this, AiProvidersActivity::class.java))
-        }
-
-        sideKeyTestButton.setOnClickListener {
-            startActivity(Intent(this, com.blurr.voice.sidekey.SideKeyTestActivity::class.java))
-        }
-
-        buildSideKeyPressRows()
-    }
-
-    private fun setupAutoSavingListeners() {
-        var isInitialLoad = true
-
-        ttsVoicePicker.setOnValueChangedListener { _, _, newVal ->
-            val selectedVoice = availableVoices[newVal]
-            saveSelectedVoice(selectedVoice)
-
-            if (!isInitialLoad) {
-                voiceTestJob?.cancel()
-                voiceTestJob = lifecycleScope.launch {
-                    delay(400L)
-                    // First, stop any currently playing voice
-                    sc.stop()
-                    // Then, play the new sample
-                    playVoiceSample(selectedVoice)
+    /** A two-button dialog for the screen's confirmations. */
+    @Composable
+    private fun InfoDialog(
+        title: String,
+        message: String,
+        confirmLabel: String,
+        onConfirm: () -> Unit,
+        onDismiss: () -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(title) },
+            text = {
+                Column {
+                    Text(message, style = MaterialTheme.typography.bodyMedium)
                 }
-            }
+            },
+            confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        )
+    }
+
+    /** Re-reads every stored value into the screen's model. */
+    private fun refresh() {
+        ui.value = buildState()
+    }
+
+    /** @return the model as the prefs currently describe it. */
+    private fun buildState(): SettingsUiState {
+        val profile = UserProfileManager(this)
+        return SettingsUiState(
+            voiceName = VoicePreferenceManager.getSelectedVoice(this).displayName,
+            showThoughts = sharedPreferences.getBoolean(KEY_SHOW_THOUGHTS, false),
+            sideKeyEnabled = EssentialKeyMapper.isEnabled(this),
+            sideKeyStatus = sideKeyStatus(),
+            presses = pressMappings(),
+            userName = profile.getName().orEmpty(),
+            userEmail = profile.getEmail().orEmpty(),
+            version = "Version ${BuildConfig.VERSION_NAME}",
+        )
+    }
+
+    /** The index of the voice named [displayName], for the picker's initial mark. */
+    private fun selectedVoiceIndex(displayName: String): Int =
+        availableVoices.indexOfFirst { it.displayName == displayName }.coerceAtLeast(0)
+
+    private fun pressMappings(): List<PressMapping> =
+        SideKeyActionPicker.pressOrder.map { (gesture, label) ->
+            PressMapping(label, EssentialKeyMapper.actionFor(this, gesture).label)
         }
 
-        ttsVoicePicker.post {
-            isInitialLoad = false
+    /**
+     * Explains what the key will do, given whether it is on and whether the
+     * accessibility service is actually connected: without the service, key events
+     * never reach Delta, and the switch alone would be telling only half the story.
+     */
+    private fun sideKeyStatus(): String {
+        val enabled = EssentialKeyMapper.isEnabled(this)
+        val connected = ScreenInteractionService.instance != null
+        return when {
+            !enabled -> "Off. Turn it on to use your mapped presses."
+            connected -> "On. Each press runs what you mapped it to."
+            else -> "On, but Delta's accessibility service is not connected, so no press " +
+                "reaches it yet."
         }
+    }
 
-        switchShowThoughts.setOnCheckedChangeListener { _, isChecked ->
-            sharedPreferences.edit().putBoolean(KEY_SHOW_THOUGHTS, isChecked).apply()
-        }
+    /** Opens the action picker for press number [index] in [SideKeyActionPicker.pressOrder]. */
+    private fun openPressPicker(index: Int) {
+        val gesture = SideKeyActionPicker.pressOrder.getOrNull(index)?.first ?: return
+        SideKeyActionPicker.show(this, gesture) { refresh() }
+    }
 
-        switchSideKeyEnabled.setOnCheckedChangeListener { _, isChecked ->
-            EssentialKeyMapper.setEnabled(this, isChecked)
-            updateSideKeyStatus()
+    /** Saves [voice], plays it, and re-renders the row that names it. */
+    private fun onVoiceChosen(voice: TTSVoice) {
+        VoicePreferenceManager.saveSelectedVoice(this, voice)
+        refresh()
+
+        voiceTestJob?.cancel()
+        voiceTestJob = lifecycleScope.launch {
+            delay(400L)
+            sc.stop()
+            playVoiceSample(voice)
         }
     }
 
     private fun playVoiceSample(voice: TTSVoice) {
         lifecycleScope.launch {
-            val cacheDir = File(cacheDir, "voice_samples")
-            val voiceFile = File(cacheDir, "${voice.name}.wav")
-
+            val voiceFile = File(File(cacheDir, "voice_samples"), "${voice.name}.wav")
             try {
+                // The samples are pre-synthesised by cacheVoiceSamples, so the
+                // preview is instant in the normal case and only falls back to a
+                // live request for a voice that has not been cached yet.
                 if (voiceFile.exists()) {
-                    val audioData = voiceFile.readBytes()
-                    sc.playAudioData(audioData)
-                    Log.d("SettingsActivity", "Playing cached sample for ${voice.displayName}")
+                    sc.playAudioData(voiceFile.readBytes())
+                    Log.d(TAG, "Playing cached sample for ${voice.displayName}")
                 } else {
                     sc.testVoice(TEST_TEXT, voice)
-                    Log.d("SettingsActivity", "Synthesizing test for ${voice.displayName}")
+                    Log.d(TAG, "Synthesizing test for ${voice.displayName}")
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    Log.e("SettingsActivity", "Error playing voice sample", e)
-                    Toast.makeText(this@SettingsActivity, "Error playing voice", Toast.LENGTH_SHORT).show()
+                    Log.e(TAG, "Error playing voice sample", e)
+                    Toast.makeText(this@SettingsActivity, "Error playing voice", Toast.LENGTH_SHORT)
+                        .show()
                 }
             }
         }
     }
 
+    /**
+     * Synthesises every voice's sample once, in the background.
+     *
+     * This is what makes the picker feel local: the samples are written to the
+     * cache on first open, and choosing a voice afterwards is playback rather than
+     * a round trip. It is deliberately not on the critical path -- the screen is
+     * usable before it finishes, and a voice that is not cached yet is synthesised
+     * on demand by [playVoiceSample].
+     */
     private fun cacheVoiceSamples() {
         lifecycleScope.launch(Dispatchers.IO) {
             val cacheDir = File(cacheDir, "voice_samples")
             if (!cacheDir.exists()) cacheDir.mkdirs()
 
-            var downloadedCount = 0
+            var downloaded = 0
             for (voice in availableVoices) {
                 val voiceFile = File(cacheDir, "${voice.name}.wav")
                 if (!voiceFile.exists()) {
                     try {
-                        val audioData = GoogleTts.synthesize(TEST_TEXT, voice)
-                        voiceFile.writeBytes(audioData)
-                        downloadedCount++
+                        voiceFile.writeBytes(GoogleTts.synthesize(TEST_TEXT, voice))
+                        downloaded++
                     } catch (e: Exception) {
-                        Log.e("SettingsActivity", "Failed to cache voice ${voice.name}", e)
+                        Log.e(TAG, "Failed to cache voice ${voice.name}", e)
                     }
                 }
             }
-            if (downloadedCount > 0) {
+            if (downloaded > 0) {
                 runOnUiThread {
-                    Toast.makeText(this@SettingsActivity, "$downloadedCount voice samples prepared.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@SettingsActivity,
+                        "$downloaded voice samples prepared.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
             }
         }
     }
 
-    private fun loadAllSettings() {
-        val savedVoiceName = sharedPreferences.getString(KEY_SELECTED_VOICE, DEFAULT_VOICE.name)
-        val savedVoice = availableVoices.find { it.name == savedVoiceName } ?: DEFAULT_VOICE
-        ttsVoicePicker.value = availableVoices.indexOf(savedVoice)
-
-        switchShowThoughts.isChecked = sharedPreferences.getBoolean(KEY_SHOW_THOUGHTS, false)
-        switchSideKeyEnabled.isChecked = EssentialKeyMapper.isEnabled(this)
-        updateSideKeyStatus()
-        refreshSideKeyPressRows()
-    }
-
-    /** Explains what the side key will do, given its enabled state and whether
-     *  the accessibility service is actually connected (without it, key events
-     *  never reach Delta). */
-    private fun updateSideKeyStatus() {
-        val enabled = EssentialKeyMapper.isEnabled(this)
-        val connected = ScreenInteractionService.instance != null
-        sideKeyStatusText.text = when {
-            !enabled -> "Off. Turn it on to use your mapped press actions."
-            connected -> "On. Each press runs whatever you mapped it to."
-            else -> "On, but the accessibility service is not connected. Enable Delta in Android's Accessibility settings."
+    private fun openBatteryOptimizationHelp() {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(BATTERY_FAQ_URL))
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No browser to open that with.", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Failed to open battery optimization link", e)
         }
-    }
-
-    private fun saveSelectedVoice(voice: TTSVoice) {
-        VoicePreferenceManager.saveSelectedVoice(this, voice)
-        Log.d("SettingsActivity", "Saved voice: ${voice.displayName}")
-    }
-
-
-    private fun showBatteryOptimizationDialog() {
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.battery_optimization_title))
-            .setMessage(getString(R.string.battery_optimization_message))
-            .setPositiveButton(getString(R.string.learn_how)) { _, _ ->
-                // Open the Tasker FAQ URL
-                val url = "https://tasker.joaoapps.com/userguide/en/faqs/faq-problem.html#00"
-                val intent = Intent(Intent.ACTION_VIEW)
-                intent.data = Uri.parse(url)
-                try {
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Could not open link. No browser found.", Toast.LENGTH_LONG).show()
-                    Log.e("SettingsActivity", "Failed to open battery optimization link", e)
-                }
-            }
-            .setNegativeButton("Cancel") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .show()
-        
-        // Set button text colors to white
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(
-            androidx.core.content.ContextCompat.getColor(this, R.color.white)
-        )
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(
-            androidx.core.content.ContextCompat.getColor(this, R.color.white)
-        )
-    }
-
-    private fun showSignOutConfirmationDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Sign Out")
-            .setMessage("Are you sure you want to sign out? This will clear all your settings and data.")
-            .setPositiveButton("Sign Out") { _, _ ->
-                signOut()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun signOut() {
-        // Clear User Profile
-        val userProfileManager = UserProfileManager(this)
-        userProfileManager.clearProfile()
-
-        // Clear all shared preferences for this app
+        UserProfileManager(this).clearProfile()
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
 
-        // In local mode there is no session to end, so going back to
-        // LoginActivity would just bounce straight through AuthGate. Send the
-        // user home instead, after re-provisioning the placeholder profile.
+        // In local mode there is no session to end, so going back to LoginActivity
+        // would bounce straight through AuthGate; send the user home instead, after
+        // re-provisioning the placeholder profile.
         val destination = if (AuthGate.isLocalMode(this)) {
-            userProfileManager.saveProfile("Local User", "local@blurr.invalid")
+            UserProfileManager(this).saveProfile("Local User", "local@blurr.invalid")
             MainActivity::class.java
         } else {
             LoginActivity::class.java
         }
 
-        val intent = Intent(this, destination)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
+        startActivity(
+            Intent(this, destination).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            },
+        )
         finish()
     }
 
-    
-    override fun getContentLayoutId(): Int = R.layout.activity_settings
-    
-    override fun getCurrentNavItem(): BaseNavigationActivity.NavItem = BaseNavigationActivity.NavItem.SETTINGS
+    companion object {
+        private const val TAG = "SettingsActivity"
+        private const val PREFS_NAME = "BlurrSettings"
+        private const val TEST_TEXT = "Hello, I'm Delta, and this is a test of the selected voice."
+        private const val BATTERY_FAQ_URL =
+            "https://tasker.joaoapps.com/userguide/en/faqs/faq-problem.html#00"
 
-    /**
-     * One tappable row per press type, built from [SideKeyActionPicker.pressOrder]
-     * so a new press type appears without touching the settings layout. Each row
-     * shows the press on the left and the action it currently runs on the right,
-     * and opens the picker for that press.
-     */
-    private fun buildSideKeyPressRows() {
-        val inflater = LayoutInflater.from(this)
-        sideKeyPressRows.removeAllViews()
-        for ((gesture, label) in SideKeyActionPicker.pressOrder) {
-            val row = inflater.inflate(R.layout.item_side_key_press, sideKeyPressRows, false)
-            row.findViewById<TextView>(R.id.pressLabel).text = label
-            row.setOnClickListener {
-                SideKeyActionPicker.show(this, gesture) { refreshSideKeyPressRows() }
-            }
-            sideKeyPressRows.addView(row)
-        }
-        refreshSideKeyPressRows()
-    }
-
-    /** Re-reads the stored mappings into the press rows. */
-    private fun refreshSideKeyPressRows() {
-        for ((index, pair) in SideKeyActionPicker.pressOrder.withIndex()) {
-            val row = sideKeyPressRows.getChildAt(index) ?: continue
-            val action = EssentialKeyMapper.actionFor(this, pair.first)
-            row.findViewById<TextView>(R.id.pressValue).text = action.label
-        }
+        /** Read by the task agent to decide whether to print its reasoning. */
+        const val KEY_SHOW_THOUGHTS = "show_thoughts"
     }
 }
