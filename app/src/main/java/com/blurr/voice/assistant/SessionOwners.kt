@@ -82,6 +82,12 @@ class SessionOwners(context: Context) :
 
     /** The window is up; let the recomposer start producing frames. */
     fun onStart() {
+        // A restore posted by AssistantSession.onHide() lands after this session has
+        // already been destroyed, and moving a DESTROYED registry to STARTED throws.
+        // That exception took the whole process down -- and with it the
+        // accessibility service the Essential Key's key events arrive through, so
+        // the key went dead until the service was rebound.
+        if (destroyed) return
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
     }
 

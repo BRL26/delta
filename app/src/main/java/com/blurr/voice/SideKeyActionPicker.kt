@@ -6,8 +6,12 @@ import android.graphics.drawable.ColorDrawable
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.blurr.voice.sidekey.AksCircleToSearch
 import com.blurr.voice.sidekey.CircleToSearchOutcome
 import com.blurr.voice.sidekey.EssentialKeyMapper
@@ -63,11 +67,20 @@ object SideKeyActionPicker {
      * @param onChanged invoked after a selection is written, so the caller can
      *   refresh the press row's current-action label.
      */
-    fun show(activity: Activity, gesture: KeyGesture, onChanged: () -> Unit) {
+    fun show(activity: AppCompatActivity, gesture: KeyGesture, onChanged: () -> Unit) {
         val dialog = android.app.Dialog(activity)
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val nav = SideKeyPickerNav()
         val composeView = ComposeView(activity).apply {
+            // A plain [android.app.Dialog] window installs none of the ViewTree owners,
+            // so ComposeView would throw "ViewTreeLifecycleOwner not found" the moment
+            // it attaches -- which took the whole process down, and with it the
+            // accessibility service the Essential Key depends on. The activity is the
+            // honest owner here: it is already the lifecycle the dialog is drawn under.
+            // Must be set before the view is attached, like AssistantSession does.
+            setViewTreeLifecycleOwner(activity)
+            setViewTreeViewModelStoreOwner(activity)
+            setViewTreeSavedStateRegistryOwner(activity)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 BlurrTheme {
