@@ -46,7 +46,6 @@ data class PressMapping(val label: String, val actionLabel: String)
  */
 data class SettingsUiState(
     val voiceName: String,
-    val showThoughts: Boolean,
     val sideKeyEnabled: Boolean,
     val sideKeyStatus: String,
     val presses: List<PressMapping>,
@@ -69,7 +68,6 @@ fun SettingsScreen(
     state: SettingsUiState,
     onNavigate: (DeltaDestination) -> Unit,
     onVoiceClick: () -> Unit,
-    onShowThoughtsChange: (Boolean) -> Unit,
     onAiProvidersClick: () -> Unit,
     onTaskLogsClick: () -> Unit,
     onSideKeyEnabledChange: (Boolean) -> Unit,
@@ -98,13 +96,6 @@ fun SettingsScreen(
                     value = state.voiceName,
                     onClick = onVoiceClick,
                     trailing = { RowChevron() },
-                )
-                DeltaRowDivider()
-                DeltaSwitchRow(
-                    title = "Show agent thoughts",
-                    subtitle = "Print the agent's reasoning as it works.",
-                    checked = state.showThoughts,
-                    onCheckedChange = onShowThoughtsChange,
                 )
             }
 

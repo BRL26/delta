@@ -111,10 +111,6 @@ class SettingsActivity : AppCompatActivity() {
             state = state,
             onNavigate = { DeltaNav.navigate(this, it) },
             onVoiceClick = { voicePickerOpen.value = true },
-            onShowThoughtsChange = { checked ->
-                sharedPreferences.edit().putBoolean(KEY_SHOW_THOUGHTS, checked).apply()
-                refresh()
-            },
             onAiProvidersClick = { startActivity(Intent(this, AiProvidersActivity::class.java)) },
             onTaskLogsClick = { startActivity(Intent(this, TaskLogsListActivity::class.java)) },
             onSideKeyEnabledChange = { checked ->
@@ -203,7 +199,6 @@ class SettingsActivity : AppCompatActivity() {
         val profile = UserProfileManager(this)
         return SettingsUiState(
             voiceName = VoicePreferenceManager.getSelectedVoice(this).displayName,
-            showThoughts = sharedPreferences.getBoolean(KEY_SHOW_THOUGHTS, false),
             sideKeyEnabled = EssentialKeyMapper.isEnabled(this),
             sideKeyStatus = sideKeyStatus(),
             presses = pressMappings(),
@@ -357,8 +352,5 @@ class SettingsActivity : AppCompatActivity() {
         private const val TEST_TEXT = "Hello, I'm Delta, and this is a test of the selected voice."
         private const val BATTERY_FAQ_URL =
             "https://tasker.joaoapps.com/userguide/en/faqs/faq-problem.html#00"
-
-        /** Read by the task agent to decide whether to print its reasoning. */
-        const val KEY_SHOW_THOUGHTS = "show_thoughts"
     }
 }

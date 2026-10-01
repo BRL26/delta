@@ -36,8 +36,6 @@ import com.blurr.voice.utilities.TTSManager
 import com.blurr.voice.utilities.addResponse
 import com.blurr.voice.utilities.getReasoningModelApiResponse
 import com.blurr.voice.utilities.FreemiumManager
-import com.blurr.voice.overlay.OverlayManager
-import com.blurr.voice.overlay.OverlayDispatcher
 import com.blurr.voice.utilities.DeltaState
 import com.blurr.voice.utilities.UserProfileManager
 import com.blurr.voice.v2.AgentService
@@ -89,7 +87,6 @@ class ConversationalAgentService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var conversationHistory = listOf<Pair<String, List<Any>>>()
     private val ttsManager by lazy { TTSManager.getInstance(this) }
-    private val overlayManager by lazy { OverlayManager.getInstance(this) }
     private val deltaStateManager by lazy { DeltaStateManager.getInstance(this) }
     private var isTextModeActive = false
     private val freemiumManager by lazy { FreemiumManager() }
@@ -98,7 +95,6 @@ class ConversationalAgentService : Service() {
     private var clarificationAttempts = 0
     private val maxClarificationAttempts = 1
     private var sttErrorAttempts = 0
-    private val maxSttErrorAttempts = 2
 
     private val clarificationAgent = ClarificationAgent()
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
@@ -144,9 +140,6 @@ class ConversationalAgentService : Service() {
 
         fetchMemories() // Start async memory fetch
 
-        OverlayDispatcher.clearAll()
-        overlayManager.startObserving()
-
         // Start state monitoring and set initial state
         deltaStateManager.startMonitoring()
         deltaStateManager.setState(DeltaState.IDLE)
@@ -158,12 +151,11 @@ class ConversationalAgentService : Service() {
      * Whether the assistant popup is on screen and is therefore the user-facing half of
      * the conversation right now.
      *
-     * Read by everything in this service that draws or listens. While the popup is up it
-     * *is* the conversation: it has its own composer, its own recogniser and its own
-     * transcript. Two assistants on one screen is not a cosmetic duplication -- the
-     * overlay holds an EditText and a transcription caption that the accessibility
-     * service would then read as the user's app, and the task agent would tap it
-     * instead of the app the user asked about.
+     * Read by everything in this service that would otherwise speak or listen. While the
+     * popup is up it *is* the conversation: it has its own composer, its own recogniser
+     * and its own transcript. Two recognisers at once is not a cosmetic duplication --
+     * the second one fails with ERROR_RECOGNIZER_BUSY, and the loser is whichever one the
+     * user is actually talking to.
      */
     private fun popupOwnsScreen(): Boolean = SessionBridge.sessionVisible.value
 
@@ -182,7 +174,6 @@ class ConversationalAgentService : Service() {
         deltaStateManager.setState(DeltaState.IDLE)
         speechCoordinator.stopListening()
         speechCoordinator.stopSpeaking()
-        // Optionally hide the transcription view since user is typing
     }
 
 
@@ -192,6 +183,13 @@ class ConversationalAgentService : Service() {
 
         if (intent?.action == ACTION_STOP_SERVICE) {
             Log.i("ConvAgent", "Received stop action. Stopping service.")
+            // Silence before the service goes. stopSelf only cancels this service's
+            // coroutines; words already handed to the TTS engine keep playing, and an
+            // open recogniser keeps holding the microphone until it is told to let go.
+            // The point of this action is that the assistant is over *now*, so the audio
+            // hardware is released here rather than in onDestroy.
+            speechCoordinator.stopSpeaking()
+            speechCoordinator.stopListening()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -252,17 +250,16 @@ class ConversationalAgentService : Service() {
             return START_STICKY
         }
 
-        // Track conversation initiation
-        firebaseAnalytics.logEvent("conversation_initiated", null)
-        trackConversationStart()
-
-        // Skip greeting and start listening immediately
-        serviceScope.launch {
-            Log.d("ConvAgent", "Starting immediate listening (no greeting)")
-            deltaStateManager.setState(DeltaState.LISTENING)
-            startImmediateListening()
-        }
-        return START_STICKY
+        // Nothing starts this service without a request any more: the assistant popup
+        // sends ACTION_SUBMIT_TEXT and the notification sends ACTION_STOP_SERVICE. This
+        // branch is only reached when START_STICKY restarts the service with a null
+        // intent after the process was killed -- there is no popup behind it and no text
+        // to act on, and the old behaviour was to open the microphone into an empty
+        // screen and hold it there. There is no interface to show an answer to, so the
+        // honest thing is to end.
+        Log.d("ConvAgent", "No request in the start intent; stopping.")
+        stopSelf()
+        return START_NOT_STICKY
     }
 
     /**
@@ -280,110 +277,23 @@ class ConversationalAgentService : Service() {
         }
     }
 
-    /**
-     * Starts listening immediately without speaking any greeting or performing memory extraction
-     * Memory extraction will be deferred until after the first user utterance
-     */
-    @RequiresApi(Build.VERSION_CODES.R)
-    private suspend fun startImmediateListening() {
-        Log.d("ConvAgent", "Starting immediate listening without greeting")
-
-        // The popup is showing and is already listening on its own recogniser. Starting a
-        // second one here would fail with ERROR_RECOGNIZER_BUSY, and the popup would be
-        // the one that loses -- the user long-pressed the power button, asked a question
-        // and got a dead microphone.
-        if (popupOwnsScreen()) {
-            Log.d("ConvAgent", "Assistant popup owns the screen; leaving the microphone to it.")
-            return
-        }
-
-        // Text mode is entered from the popup's own composer, so there is no overlay
-        // input box to re-show here -- the popup is the thing waiting for their words.
-        // Skipping the voice listener is still the point: the user chose to type.
-        if (isTextModeActive) {
-            Log.d("ConvAgent", "In text mode, skipping voice listening.")
-            return // Skip starting the voice listener entirely.
-        }
-
-
-
-        speechCoordinator.startListening(
-            onResult = { recognizedText ->
-                if (isTextModeActive) return@startListening // Ignore results in text mode
-                Log.d("ConvAgent", "Final user transcription: $recognizedText")
-                deltaStateManager.setState(DeltaState.PROCESSING)
-                mainHandler.postDelayed({
-                }, 500)
-
-                
-                processUserInput(recognizedText)
-            },
-            onError = { error ->
-                Log.e("ConvAgent", "STT Error: $error")
-                if (isTextModeActive) return@startListening // Ignore errors in text mode
-
-                // An automation task is running: any recogniser session ending here
-                // (silence timeout, no match, engine hiccup) is the assistant's own
-                // side-channel closing behind the agent, not a failure to understand
-                // the user. Stay quiet instead of announcing "didn't catch that" and
-                // eventually shutting the assistant down. The user's next real
-                // utterance still arrives through onResult untouched.
-                if (AgentService.isRunning) {
-                    Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
-                    deltaStateManager.setState(DeltaState.IDLE)
-                    return@startListening
-                }
-
-                if (error == "No speech match") {
-                    Log.d("ConvAgent", "No speech match detected. Silently resetting to IDLE.")
-                    deltaStateManager.setState(DeltaState.IDLE)
-                    // We return early so we don't trigger the "I didn't catch that" logic
-                    return@startListening
-                }
-                // Trigger error state in state manager
-                deltaStateManager.triggerErrorState()
-
-                // Track STT errors
-                val sttErrorBundle = android.os.Bundle().apply {
-                    putString("error_message", error.take(100))
-                    putInt("error_attempt", sttErrorAttempts + 1)
-                    putInt("max_attempts", maxSttErrorAttempts)
-                }
-                firebaseAnalytics.logEvent("stt_error", sttErrorBundle)
-                
-                sttErrorAttempts++
-                serviceScope.launch {
-                    if (sttErrorAttempts >= maxSttErrorAttempts) {
-                        firebaseAnalytics.logEvent("conversation_ended_stt_errors", null)
-                        val exitMessage = "I'm having trouble understanding you clearly. Please try calling later!"
-                        trackMessage("model", exitMessage, "error_message")
-                        gracefulShutdown(exitMessage, "stt_errors")
-                    } else {
-                        val retryMessage = "I'm sorry, I didn't catch that. Could you please repeat?"
-                        speakAndThenListen(retryMessage)
-                    }
-                }
-            },
-            onPartialResult = { partialText ->
-                if (isTextModeActive) return@startListening // Ignore partial results in text mode
-            },
-            onListeningStateChange = { listening ->
-                Log.d("ConvAgent", "Listening state: $listening")
-                if (listening) {
-                    if (isTextModeActive) return@startListening // Ignore state changes in text mode
-                    deltaStateManager.setState(DeltaState.LISTENING)
-                } else {
-                    if (!isTextModeActive) {
-                        deltaStateManager.setState(DeltaState.IDLE)
-                    }
-                }
-            }
-        )
-    }
-
-
     @RequiresApi(Build.VERSION_CODES.R)
     private suspend fun speakAndThenListen(text: String, draw: Boolean = true) {
+        // The popup is the assistant's only face. If it is gone, there is nobody left to
+        // say this to: speaking into an empty screen is the old arrangement where the
+        // popup was a view onto a conversation running without it, and after the reply the
+        // conversation then opened the microphone, heard nothing, apologised and tried
+        // again. Ending here is the honest answer, and it is what stops that loop -- the
+        // service's own stop path takes the window away as well.
+        //
+        // Checked before publishing rather than after speaking: the whole point is to not
+        // make a sound.
+        if (!popupOwnsScreen()) {
+            Log.d("ConvAgent", "Assistant popup is gone; ending instead of speaking to nothing.")
+            SessionBridge.endOnServiceShutdown()
+            stopSelf()
+            return
+        }
         // Only update system prompt with memories if we've heard the first utterance
 //        if (hasHeardFirstUtterance) {
 //            updateSystemPromptWithMemories()
@@ -410,98 +320,14 @@ class ConversationalAgentService : Service() {
         deltaStateManager.setState(DeltaState.SPEAKING)
         speechCoordinator.speakText(text)
         Log.d("ConvAgent", "Delta said: $text")
-        // The same reason as in startImmediateListening: the popup is up and listening.
-        // Not gated on the text-mode flag because this is a different situation -- the
-        // user is not typing here, the popup just happens to be what they are talking to
-        // -- and folding the two into one condition made the log line and the comment
-        // describe the wrong case.
-        if (popupOwnsScreen()) {
-            Log.d("ConvAgent", "Assistant popup owns the screen; leaving the microphone to it.")
-            return
-        }
-        // --- CHANGE 4: Check if we are in text mode before starting to listen ---
-        if (isTextModeActive) {
-            Log.d("ConvAgent", "In text mode, skipping voice listening.")
-            return // IMPORTANT: Skip starting the voice listener entirely.
-        }
-        speechCoordinator.startListening(
-            onResult = { recognizedText ->
-                if (isTextModeActive) return@startListening // Ignore errors in text mode
-                Log.d("ConvAgent", "Final user transcription: $recognizedText")
-                deltaStateManager.setState(DeltaState.PROCESSING)
-                mainHandler.postDelayed({
-                }, 500)
-                
-                // Mark that we've heard the first utterance and trigger memory extraction if not already done
-                if (!hasHeardFirstUtterance) {
-                    hasHeardFirstUtterance = true
-                    Log.d("ConvAgent", "First utterance received, triggering memory extraction")
-                    serviceScope.launch {
-                        try {
-                            updateSystemPromptWithScreenContext()
-                        } catch (e: Exception) {
-                            Log.e("ConvAgent", "Error during first utterance memory extraction", e)
-                            // Continue execution even if memory extraction fails
-                        }
-                    }
-                }
-                
-                processUserInput(recognizedText)
-
-            },
-            onError = { error ->
-                Log.e("ConvAgent", "STT Error: $error")
-                if (isTextModeActive) return@startListening // Ignore errors in text mode
-
-                // Same quiet path as startImmediateListening: while an automation
-                // task is running, a recogniser session that ends on silence or a
-                // hiccup is the side-channel closing, not a user failure. The agent
-                // keeps working untouched; the next real utterance still registers.
-                if (AgentService.isRunning) {
-                    Log.d("ConvAgent", "Task running; ignoring STT error '$error' quietly.")
-                    deltaStateManager.setState(DeltaState.IDLE)
-                    return@startListening
-                }
-
-                // Trigger error state in state manager
-                deltaStateManager.triggerErrorState()
-                
-                // Track STT errors
-                val sttErrorBundle = android.os.Bundle().apply {
-                    putString("error_message", error.take(100))
-                    putInt("error_attempt", sttErrorAttempts + 1)
-                    putInt("max_attempts", maxSttErrorAttempts)
-                }
-                firebaseAnalytics.logEvent("stt_error", sttErrorBundle)
-                
-                sttErrorAttempts++
-                serviceScope.launch {
-                    if (sttErrorAttempts >= maxSttErrorAttempts) {
-                        firebaseAnalytics.logEvent("conversation_ended_stt_errors", null)
-                        val exitMessage = "I'm having trouble understanding you clearly. Please try calling later!"
-                        trackMessage("model", exitMessage, "error_message")
-                        gracefulShutdown(exitMessage, "stt_errors")
-                    } else {
-                        speakAndThenListen("I'm sorry, I didn't catch that. Could you please repeat?")
-                    }
-                }
-            },
-            onPartialResult = { partialText ->
-                if (isTextModeActive) return@startListening // Ignore errors in text mode
-            },
-            onListeningStateChange = { listening ->
-                Log.d("ConvAgent", "Listening state: $listening")
-                if (listening) {
-                    if (isTextModeActive) return@startListening // Ignore errors in text mode
-                    deltaStateManager.setState(DeltaState.LISTENING)
-                } else {
-                    if (!isTextModeActive) {
-                        deltaStateManager.setState(DeltaState.IDLE)
-                    }
-                }
-            }
-        )
+        // The microphone belongs to the popup for the whole conversation. The reply above
+        // is what the user hears; their answer arrives back here as a fresh
+        // ACTION_SUBMIT_TEXT from the popup's own recogniser. So this turn ends with the
+        // words, exactly where it started -- there is deliberately no listening here. Two
+        // recognisers is a loss for whichever one loses, and the popup is the one the user
+        // is looking at.
     }
+
 
     // --- CHANGED: Rewritten to process the new custom text format ---
     @RequiresApi(Build.VERSION_CODES.R)
@@ -520,12 +346,11 @@ class ConversationalAgentService : Service() {
             // Into the assistant popup's transcript, before anything can fail.
             //
             // Published here rather than at the recogniser or in trackMessage because
-            // this is the one place every request passes through -- voice from the
-            // overlay's own microphone, voice and text from the popup, and text from the
-            // overlay's input box. trackMessage was the tempting single hook and is the
-            // wrong one twice over: it returns early for a signed-out user, so the popup
-            // would show an empty conversation for anyone not logged in, and it runs
-            // inside its own coroutine, so the line would arrive late and out of order.
+            // this is the one place every request passes through, whether it was spoken
+            // or typed. trackMessage was the tempting single hook and is the wrong one
+            // twice over: it returns early for a signed-out user, so the popup would show
+            // an empty conversation for anyone not logged in, and it runs inside its own
+            // coroutine, so the line would arrive late and out of order.
             AssistantSessionState.userInput(userInput)
             AssistantSessionState.setThinking(true)
             updateSystemPromptWithAgentStatus()
@@ -654,7 +479,7 @@ class ConversationalAgentService : Service() {
                                     val originalInstruction = decision.instruction
                                     AgentService.start(applicationContext, originalInstruction)
                                     trackMessage("model", decision.reply, "task_confirmation")
-                                    gracefulShutdown(decision.reply, "task_executed")
+                                    gracefulShutdown(decision.reply, "task_executed", keepWindow = true)
                                 }
                             } else {
                                 Log.d(
@@ -689,7 +514,7 @@ class ConversationalAgentService : Service() {
                                     AgentService.start(applicationContext, instruction)
                                 }
                                 trackMessage("model", decision.reply, "task_confirmation")
-                                gracefulShutdown(decision.reply, "task_executed")
+                                gracefulShutdown(decision.reply, "task_executed", keepWindow = true)
                             }
                         }else{
                             Log.w("ConvAgent", "User has no tasks remaining. Denying request.")
@@ -1202,7 +1027,11 @@ class ConversationalAgentService : Service() {
         }
     }
 
-    private suspend fun gracefulShutdown(exitMessage: String? = null, endReason: String = "graceful") {
+    private suspend fun gracefulShutdown(
+        exitMessage: String? = null,
+        endReason: String = "graceful",
+        keepWindow: Boolean = false,
+    ) {
         // Track graceful shutdown
         val shutdownBundle = android.os.Bundle().apply {
             putBoolean("had_exit_message", exitMessage != null)
@@ -1226,7 +1055,15 @@ class ConversationalAgentService : Service() {
             // Removed old memory extraction logic
             triggerMemoryGeneration()
             
-            // 3. Stop the service
+            // 3. Stop the service, and clear the popup with it
+            //
+            // keepWindow is true only when the conversation is being handed to the task
+            // agent: there the popup is not ending, it is about to become the bubble the
+            // user watches the task through. Every other reason to be here -- the model
+            // said goodbye, the user said stop, the retries ran out -- really is the end,
+            // and the window has to go with the service or the transcript sits on screen
+            // over a conversation that is no longer running.
+            if (!keepWindow) SessionBridge.endOnServiceShutdown()
             stopSelf()
 
     }
@@ -1257,7 +1094,12 @@ class ConversationalAgentService : Service() {
         // Make a thread-safe copy of the conversation history.
         // Removed old memory extraction logic
         triggerMemoryGeneration()
-        
+
+        // The window goes too: this is the forceful end, and a session left showing the
+        // transcript of an instantly-abandoned conversation would be the popup outliving
+        // the assistant it exists to show.
+        SessionBridge.endOnServiceShutdown()
+
         serviceScope.cancel("User tapped outside, forcing instant shutdown.")
 
         stopSelf()
@@ -1381,12 +1223,18 @@ class ConversationalAgentService : Service() {
         
         // The assistant mutes the system stream while its microphone is open, to hide the
         // recognition engine's "listening" tone. The session UI normally restores it, but
-        // the service can be stopped from its own notification while the overlay is gone
-        // and nothing else is left holding the microphone, so this is the backstop that
-        // stops the phone being left with no system sounds.
+        // the service can be stopped from its own notification with nothing else left
+        // holding the microphone, so this is the backstop that stops the phone being left
+        // with no system sounds.
         VoiceInputController.restoreSystemSounds(this)
 
-        overlayManager.stopObserving()
+        // Backstop for every other way out of this service. The stop action and the
+        // graceful path both release the audio hardware before asking to stop, but the
+        // service can also be killed by the platform, and cancelling the coroutine scope
+        // below does not un-speak words already handed to the TTS engine or close a
+        // recogniser that is still holding the microphone.
+        speechCoordinator.stopSpeaking()
+        speechCoordinator.stopListening()
         firebaseAnalytics.logEvent("conversational_agent_destroyed", null)
         
         // Track conversation end if not already tracked
@@ -1400,8 +1248,6 @@ class ConversationalAgentService : Service() {
         // Stop state monitoring and set final state
         deltaStateManager.setState(DeltaState.IDLE)
         deltaStateManager.stopMonitoring()
-        // USE the new manager to hide the wave and transcription view
-
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

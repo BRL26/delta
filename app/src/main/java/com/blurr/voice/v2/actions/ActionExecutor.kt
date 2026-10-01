@@ -23,14 +23,11 @@ import com.blurr.voice.triggers.DeltaNotificationListenerService
 import com.blurr.voice.reminders.ReminderScheduler
 import com.blurr.voice.utilities.SpeechCoordinator
 import com.blurr.voice.utilities.UserInputManager
-import com.blurr.voice.overlay.OverlayManager
 import com.blurr.voice.v2.ActionResult
 import com.blurr.voice.v2.InstalledAppsCatalog
 import com.blurr.voice.v2.fs.FileSystem
 import com.blurr.voice.v2.perception.ScreenAnalysis
 import com.blurr.voice.intents.IntentRegistry
-import com.blurr.voice.overlay.OverlayDispatcher
-import com.blurr.voice.overlay.OverlayPriority
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -441,10 +438,6 @@ class ActionExecutor(private val finger: Finger) {
                 val success = fileSystem.writeFile(action.fileName, action.content)
                 if (success) {
                     Log.d("ActionExecutor", "Wrote content to '${action.fileName} ${action.content}'.")
-                        OverlayDispatcher.show(
-                            action.content,
-                            OverlayPriority.CAPTION
-                        )
                     ActionResult(longTermMemory = "Wrote content to '${action.fileName}'.")
                 } else {
                     ActionResult(error = "Failed to write to file '${action.fileName}'.")
@@ -577,16 +570,10 @@ class ActionExecutor(private val finger: Finger) {
                 if (keyguardManager == null || !keyguardManager.isKeyguardLocked) {
                     ActionResult(longTermMemory = "The phone is already unlocked.")
                 } else {
-                    // Ask, then surface the real lock screen. The pill doubles as
-                    // the "please unlock" banner; requestDismissKeyguard shows the
-                    // actual PIN / password / fingerprint prompt on top.
-                    OverlayManager.getInstance(context).showAgentStatus(
-                        goal = "Unlock your phone",
-                        activity = "Please unlock to continue",
-                        step = null,
-                        maxSteps = null,
-                        onStop = null
-                    )
+                    // Ask out loud, then surface the real lock screen: the speech says
+                    // why, and requestDismissKeyguard shows the actual PIN / password /
+                    // fingerprint prompt on top. No floating banner -- the assistant's
+                    // status lives in its own popup, not in a second window.
                     Log.d(TAG, "🔓 Keyguard is locked - asking the user to unlock.")
                     runBlocking {
                         SpeechCoordinator.getInstance(context)

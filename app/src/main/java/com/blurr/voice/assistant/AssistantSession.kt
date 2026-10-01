@@ -60,7 +60,7 @@ class AssistantSession(
     override fun onCreate() {
         super.onCreate()
         owners.onCreate()
-        SessionBridge.attach(this)
+        SessionBridge.attach(this, appContext)
     }
 
     override fun onCreateContentView(): View {
@@ -280,7 +280,14 @@ class AssistantSession(
         super.onBackPressed()
     }
 
-    /** Ends the session for real. Used by the pill's close button. */
+    /**
+     * Takes the window away, without touching the services.
+     *
+     * The services are stopped by the caller: [SessionBridge.requestClose] stops them
+     * first so the voice ends in the same frame, and [SessionBridge.endOnServiceShutdown]
+     * deliberately does not because it is being called from inside one of them. Windows
+     * and services are two different lifetimes and this method only owns the first.
+     */
     fun finishNow() {
         finish()
     }
@@ -299,20 +306,30 @@ class AssistantSession(
      * between the assistant getting out of the way and the assistant disappearing: the
      * answer is still there, one tap away, and the screen underneath is usable.
      *
+     * When nothing is coming back, the assistant is over: the services are stopped here
+     * rather than left running. That is the "ends by itself" half of the rule -- a
+     * session with no transcript and no window has nothing on screen to talk to, and
+     * leaving the recogniser and the speaker alive is what made a closed popup keep
+     * talking and keep failing to hear anything.
+     *
      * Not attempted when the user closed it on purpose, which is the whole reason
      * [SessionBridge.requestClose] records the intent rather than just calling finish.
      */
     override fun onHide() {
         super.onHide()
-        val hiddenByUser = SessionBridge.onWindowHidden()
+        val restored = SessionBridge.onWindowHidden()
         // Always false first: whatever happens next, the overlay interface is now
         // allowed to draw again, and a restore that the platform refuses must not leave
         // it suppressed with nothing on screen.
         SessionBridge.onSessionHidden()
         // Stop the recomposer while the window is not visible. Deliberately after the
         // restore decision: bringing the window back needs the composition alive.
-        if (!hiddenByUser) owners.onStop()
-        else main.postDelayed({ owners.onStart() }, RESTORE_DELAY_MS)
+        if (restored) {
+            main.postDelayed({ owners.onStart() }, RESTORE_DELAY_MS)
+        } else {
+            owners.onStop()
+            SessionBridge.stopAssistant()
+        }
     }
 
     /**
@@ -341,13 +358,18 @@ class AssistantSession(
         super.onDestroy()
         // Before anything else, so an action still running cannot post a window change
         // to a session that is on its way out.
-        SessionBridge.detach(this)
+        val wasLive = SessionBridge.detach(this)
         SessionBridge.onSessionHidden()
         // Dispose the composition before the lifecycle reaches DESTROYED: the
         // composition is still observing it at this point.
         contentView?.disposeComposition()
         contentView = null
         owners.onDestroy()
+        // The other half of "ends by itself": a session destroyed without a replacement
+        // is the end of the assistant, whatever triggered the teardown. Skipped when the
+        // platform has already attached the next session, where stopping would kill a
+        // conversation that has just started.
+        if (wasLive) SessionBridge.stopAssistant()
     }
 
     /**

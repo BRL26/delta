@@ -31,8 +31,6 @@
     <string name="speech_error">Speech recognition error</string>
     <string name="no_speech_detected">No speech detected</string>
     <string name="input_box_hint">+ Ask Delta</string>
-    <string name="stop_agent">Stop Delta</string>
-    <string name="dismiss_agent_status">Hide status</string>
     <string name="speech_permission_required">Microphone permission required for voice input</string>
     <string name="processing_voice_command">Processing voice command…</string>
     <string name="performing_task">I will perform the task: %s</string>

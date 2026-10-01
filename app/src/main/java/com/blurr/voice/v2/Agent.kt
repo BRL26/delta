@@ -15,11 +15,6 @@ import com.blurr.voice.v2.llm.GeminiMessage
 import com.blurr.voice.v2.message_manager.MemoryManager
 import com.blurr.voice.v2.perception.Perception
 import com.blurr.voice.utilities.SpeechCoordinator
-import com.blurr.voice.overlay.OverlayDispatcher
-import com.blurr.voice.overlay.OverlayManager
-import com.blurr.voice.overlay.OverlayPriority
-import com.blurr.voice.overlay.OverlayPosition
-import com.blurr.voice.SettingsActivity
 import kotlinx.coroutines.delay
 
 /**
@@ -82,25 +77,6 @@ class Agent(
         repeatNudgeSent = false
         Log.d(TAG, "--- Agent starting task: '$initialTask' ---")
 
-        val overlay = OverlayManager.getInstance(context)
-
-        // The pill's X stops the whole executor rather than just this loop, so
-        // it goes through the service - the same path the notification's stop
-        // action uses, which is what onDestroy then cleans up.
-        val stopAgent = {
-            Log.d(TAG, "Stop requested from the status pill.")
-            AgentService.stop(context)
-        }
-
-        // The agent's floating pill is a fallback: when the assistant popup is on
-        // screen (bubble or sheet), its own Material UI carries the same status, and
-        // a second overlay on top would just cover the screen. Show the pill only
-        // when no session window is visible; [hideAgentStatus] still runs
-        // unconditionally so a stale pill from an earlier arrangement is removed.
-        if (!SessionBridge.sessionVisible.value) {
-            overlay.showAgentStatus(initialTask, "Starting", 0, maxSteps, stopAgent)
-        }
-
         // Get the assistant popup out of the way before the first read.
         //
         // This is not cosmetic and the loop cannot work around it: perception reads the
@@ -138,7 +114,6 @@ class Agent(
             if (Finger(context).openApp(fastOpenPkg)) {
                 Log.d(TAG, "✅ Direct-open fast path: '$fastOpenHint' ($fastOpenPkg).")
                 SessionBridge.noteAppLaunched()
-                overlay.hideAgentStatus()
                 val completion = "Opened $fastOpenHint. Is there anything else you need?"
                 speechCoordinator.speakToUser(completion)
                 AssistantSessionState.reply(completion)
@@ -156,9 +131,6 @@ class Agent(
 
         while (!state.stopped && state.nSteps <= maxSteps) {
             Log.d(TAG,"\n--- Step ${state.nSteps}/$maxSteps ---")
-            if (!SessionBridge.sessionVisible.value) {
-                overlay.showAgentStatus(initialTask, "Working with tools", state.nSteps, maxSteps, stopAgent)
-            }
             SessionBridge.beginScreenWork()
             SessionBridge.awaitScreenReady()
 
@@ -189,7 +161,6 @@ class Agent(
                 memoryManager.addContextMessage(GeminiMessage(text = "System Note: Your previous output was not valid JSON. Please ensure your response is correctly formatted."))
                 if (state.consecutiveFailures >= settings.maxFailures) {
                     Log.d(TAG,"❌ Agent failed too many times consecutively. Stopping.")
-                    overlay.hideAgentStatus()
                     speechCoordinator.speakToUser("Agent failed after multiple attempts. Stopping execution.")
                     break
                 }
@@ -234,49 +205,13 @@ class Agent(
             // The nextGoal is the model's own plain-language description of what
             // it is about to do, which is exactly what belongs in the pill.
             val stepGoal = agentOutput.nextGoal?.takeIf { it.isNotBlank() } ?: "Working"
-            if (!SessionBridge.sessionVisible.value) {
-                overlay.showAgentStatus(
-                    goal = initialTask,
-                    activity = stepGoal,
-                    step = state.nSteps,
-                    maxSteps = maxSteps,
-                    onStop = stopAgent
-                )
-            }
-            // The same line, into the assistant popup's own transcript.
+            // The step, into the assistant popup's transcript.
             //
-            // Two destinations rather than one because there are two status surfaces and
-            // they are shown in different situations: the pill appears when there is no
-            // popup (notification), and the popup's activity row when the user
-            // is talking to it. AssistantSessionState.activity sets the resting text of
-            // the collapsed bubble as well as appending, so one call covers the row and
-            // the bubble it will be replaced by.
+            // AssistantSessionState.activity sets the resting text of the collapsed
+            // bubble as well as appending, so one call covers the activity row and the
+            // bubble it will be replaced by.
             AssistantSessionState.setThinking(true)
             AssistantSessionState.activity(stepGoal)
-
-            // Show thoughts if enabled
-            val sharedPrefs = context.getSharedPreferences("BlurrSettings", Context.MODE_PRIVATE)
-            // Thoughts are only shown as a floating toast when the assistant popup is
-            // gone; while the session window is on screen the activity line already
-            // carries this, and a toast on top of the popup is just a cover-up.
-            if (sharedPrefs.getBoolean(SettingsActivity.KEY_SHOW_THOUGHTS, false) &&
-                !SessionBridge.sessionVisible.value
-            ) {
-                val thoughtText = buildString {
-                    agentOutput.thinking?.let { if (it.isNotEmpty()) append("Thinking: ${agentOutput.thinking}\n") }
-                    agentOutput.memory?.let { if (it.isNotEmpty()) append("Memory: ${agentOutput.memory}\n") }
-                    agentOutput.nextGoal?.let { if (it.isNotEmpty()) append("Next Goal: ${agentOutput.nextGoal}") }
-                }.trim()
-
-                if (thoughtText.isNotEmpty()) {
-                    OverlayDispatcher.show(
-                        text = thoughtText,
-                        priority = OverlayPriority.TASKS,
-                        duration = 8000L, // Show for 8 seconds
-                        position = OverlayPosition.TOP
-                    )
-                }
-            }
 
             // 4. ACT: Execute the LLM's planned actions.
             Log.d(TAG,"💪 Executing actions...")
@@ -310,7 +245,6 @@ class Agent(
                     ?.first as? Action.OpenApp
                 if (opened != null) {
                     Log.d(TAG, "✅ Plain app-open request; finishing after opening '${opened.appName}'.")
-                    overlay.hideAgentStatus()
                     val completion = "Opened ${opened.appName}. Is there anything else you need?"
                     speechCoordinator.speakToUser(completion)
                     AssistantSessionState.reply(completion)
@@ -364,7 +298,6 @@ class Agent(
                 }
 
                 Log.d(TAG,"✅ Agent finished the task.")
-                overlay.hideAgentStatus()
 
                 // The done action carries the model's final answer, and that
                 // answer is what the user should hear -- not a canned "task
@@ -392,7 +325,6 @@ class Agent(
         }
 
         // --- Loop Finished ---
-        overlay.hideAgentStatus()
         // The task is over, so the popup may have its answer back. settleAfterTurn
         // decides between the full sheet and a bubble from the turn's own facts -- an app
         // launch, or the keep-as-a-bubble mode the user armed -- and it is the only

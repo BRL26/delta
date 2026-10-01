@@ -17,8 +17,6 @@ import com.blurr.voice.utilities.ApiKeyManager
 import com.blurr.voice.api.Eyes
 import com.blurr.voice.api.Finger
 import com.blurr.voice.api.LlmProviderStore
-import com.blurr.voice.overlay.OverlayDispatcher
-import com.blurr.voice.overlay.OverlayManager
 import com.blurr.voice.v2.actions.ActionExecutor
 import com.blurr.voice.v2.fs.FileSystem
 import com.blurr.voice.v2.llm.GeminiApi
@@ -63,7 +61,6 @@ class AgentService : Service() {
     private lateinit var perception: Perception
     private lateinit var llmApi: GeminiApi
     private lateinit var actionExecutor: ActionExecutor
-    private lateinit var overlayManager: OverlayManager
 
     // Firebase instances for task tracking
     private val db = Firebase.firestore
@@ -115,10 +112,6 @@ class AgentService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate: Service is being created.")
-        overlayManager = OverlayManager.getInstance(this)
-        OverlayDispatcher.clearAll()
-        overlayManager.startObserving()
-
         createNotificationChannel()
 
         settings = AgentSettings() // Use default settings for now
@@ -204,8 +197,6 @@ class AgentService : Service() {
 
             // Update notification for the new task
             notificationManager.notify(NOTIFICATION_ID, createNotification("Working on: $task"))
-            overlayManager.showAgentStatus(task, "Starting", 0, 150, onStop = { stop(this) })
-
             try {
                 Log.i(TAG, "Executing task: $task")
                 trackTaskInFirebase(task)
@@ -226,10 +217,6 @@ class AgentService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy: Service is being destroyed.")
-//        overlayManager.stopObserving()
-        OverlayDispatcher.clearAll()
-        overlayManager.hideAgentStatus()
-        overlayManager.stopObserving()
         isRunning = false
         currentTask = null
         taskQueue.clear()

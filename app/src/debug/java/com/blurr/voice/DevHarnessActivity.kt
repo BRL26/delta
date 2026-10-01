@@ -10,7 +10,6 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.blurr.voice.api.LlmProviderStore
-import com.blurr.voice.overlay.OverlayManager
 import com.blurr.voice.reminders.ReminderScheduler
 import com.blurr.voice.v2.AgentService
 
@@ -19,9 +18,9 @@ import com.blurr.voice.v2.AgentService
  * reachable by talking to the app.
  *
  * Lives in the debug source set, so it is never compiled into a release build.
- * Exists because the agent executor, the status pill and the reminder
- * scheduler have no UI to click: the only other way in is to speak to the
- * device, which is not something a build can verify.
+ * Exists because the agent executor and the reminder scheduler have no UI to
+ * click: the only other way in is to speak to the device, which is not
+ * something a build can verify.
  */
 class DevHarnessActivity : Activity() {
 
@@ -68,16 +67,6 @@ class DevHarnessActivity : Activity() {
             AgentService.start(this, "Open the Settings app and scroll down the list")
         }
 
-        button("Show pill only (no agent)") {
-            val overlay = OverlayManager.getInstance(this)
-            overlay.startObserving()
-            overlay.showAgentStatus("Demo goal", "Looking at the screen", 7, 150)
-        }
-
-        button("Hide pill") {
-            OverlayManager.getInstance(this).hideAgentStatus()
-        }
-
         button("Schedule reminder in 8s") {
             val id = ReminderScheduler.schedule(
                 context = this,
@@ -114,65 +103,9 @@ class DevHarnessActivity : Activity() {
 
         setContentView(column)
 
-        // Lets a build verify the overlays without anyone touching the screen,
-        // which matters when the test device is locked:
-        //   am start -n .../DevHarnessActivity --ez autopill true
-        if (intent?.getBooleanExtra("autopill", false) == true) {
-            val overlay = OverlayManager.getInstance(this)
-            overlay.startObserving()
-            overlay.showAgentStatus(
-                "Search for the best pizza places near me and tell me the top result",
-                "Looking at the screen and thinking about what to do next",
-                7,
-                150
-            ) {
-                Log.d(TAG, "STOP BUTTON PRESSED")
-            }
-            Log.d(TAG, "autopill: requested")
-        }
-
         // The "autoinput" harness exercised the service's own overlay text composer.
         // That composer is gone: text input now happens in the assistant popup, and
         // there is nothing left in the app that inflates a TextInputLayout from a
         // Service context, so there is nothing here for the harness to exercise.
-
-        if (intent?.getBooleanExtra("dumptree", false) == true) {
-            // Measures the pill off-screen and logs its view tree. The pill is
-            // a TYPE_APPLICATION_OVERLAY, so it does not show up in
-            // `uiautomator dump` - this is the only way to check that the stop
-            // control and the close X actually got laid out.
-            val probe = com.blurr.voice.overlay.AgentStatusPill(this)
-            probe.show(
-                goal = "Open the ChatGPT app",
-                activity = "Looking at the screen",
-                step = 7,
-                maxSteps = 150,
-                onStop = { Log.d(TAG, "STOP TAPPED") }
-            )
-            probe.measure(
-                View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(2392, View.MeasureSpec.AT_MOST)
-            )
-            probe.layout(0, 0, probe.measuredWidth, probe.measuredHeight)
-            Log.d(TAG, "pill ${probe.measuredWidth}x${probe.measuredHeight}px")
-            dumpTree(probe, 0)
-        }
-    }
-
-    /** Logs each node's class, pixel size and clickability. */
-    private fun dumpTree(view: View, depth: Int) {
-        val pad = "  ".repeat(depth)
-        val label = when (view) {
-            is TextView -> "\"${view.text}\""
-            else -> ""
-        }.let { if (it.isEmpty()) "" else " $it" }
-        Log.d(
-            TAG,
-            "$pad${view.javaClass.simpleName} ${view.width}x${view.height}" +
-                " clickable=${view.isClickable} visible=${view.visibility}$label"
-        )
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) dumpTree(view.getChildAt(i), depth + 1)
-        }
     }
 }

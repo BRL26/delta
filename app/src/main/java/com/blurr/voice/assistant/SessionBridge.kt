@@ -1,5 +1,6 @@
 package com.blurr.voice.assistant
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -89,6 +90,29 @@ object SessionBridge {
     private var session: AssistantSession? = null
 
     /**
+     * The application context, handed over by the session when it attaches.
+     *
+     * Kept so the end-of-assistant paths -- which live here because they have to be one
+     * funnel, and are reached from the Compose close button as well as from the window
+     * callbacks -- can stop the services. The session has a context and the bridge does
+     * not, which is the whole reason it is passed in once rather than stashed per call.
+     */
+    @Volatile
+    private var appContext: Context? = null
+
+    /**
+     * True once the assistant has been ended for this invocation.
+     *
+     * The X, the window going away for good and the platform tearing the session down all
+     * converge on [stopAssistant], and any two of them can run within a frame of each
+     * other. Stopping the services twice is not free: [AssistantInput.stop] starts the
+     * conversational service with its stop action, so a second call can resurrect a
+     * service that is mid-teardown. The flag makes the second call a no-op.
+     */
+    @Volatile
+    private var assistantStopped = false
+
+    /**
      * When the screen was last disturbed, on the monotonic clock.
      *
      * Monotonic rather than wall time because this is only ever subtracted from itself
@@ -104,8 +128,9 @@ object SessionBridge {
      */
     private val main = Handler(Looper.getMainLooper())
 
-    internal fun attach(active: AssistantSession) {
+    internal fun attach(active: AssistantSession, context: Context) {
         session = active
+        appContext = context.applicationContext
         // Always start a new invocation as the full sheet, even if the previous one was
         // collapsed when the system tore it down, and even if the mode is still armed.
         // A popup that opened as a bubble would be showing the user a progress line
@@ -123,15 +148,24 @@ object SessionBridge {
         // so carrying it forward would make the very first swipe of the next
         // conversation get ignored.
         closeRequested = false
+        // And the assistant is alive again. Without this a session reused by the
+        // platform after a stop would refuse to stop a second time, which is the
+        // failure the flag exists to prevent, inverted.
+        assistantStopped = false
     }
 
-    internal fun detach(ended: AssistantSession) {
-        // Only clear if it is still ours: the platform can rebind before tearing the
-        // old session down, and clearing then would unhook the live one.
-        if (session === ended) {
-            session = null
-            _collapsed.value = false
-        }
+    /**
+     * The session is being destroyed.
+     *
+     * Returns whether it was still the live one. The platform can attach the next
+     * session before destroying the previous one, and the caller must not end the
+     * assistant when a conversation has just started in a new window.
+     */
+    internal fun detach(ended: AssistantSession): Boolean {
+        if (session !== ended) return false
+        session = null
+        _collapsed.value = false
+        return true
     }
 
     /**
@@ -272,7 +306,54 @@ object SessionBridge {
     /** The X on the pill: this one really is going away. */
     fun requestClose() {
         closeRequested = true
+        // Stop the voice before the window. The window teardown is asynchronous, and the
+        // whole complaint about the X was that the assistant kept talking after it was
+        // pressed -- so the services go first and the window follows, never the reverse.
+        stopAssistant()
         session?.finishNow()
+    }
+
+    /**
+     * The assistant ended on its own, from the conversation service's side.
+     *
+     * Used when the service's own logic decides the conversation is over: the model said
+     * goodbye, the user said "stop", or the retry budget ran out. The window has to go
+     * too -- an assistant that has stopped but left its transcript on screen is exactly
+     * the "layer on top" that the popup was rebuilt to stop being.
+     *
+     * The services are only marked stopped rather than stopped over an Intent: the
+     * caller *is* one of them, and starting the conversational service's stop action
+     * from its own shutdown path can bring it back. [stopAssistant] is therefore not
+     * called; the two pieces of state it also resets are, because the transcript is the
+     * thing the user sees.
+     */
+    fun endOnServiceShutdown() {
+        closeRequested = true
+        assistantStopped = true
+        AssistantSessionState.setThinking(false)
+        AssistantSessionState.clearActivity()
+        main.post { session?.finishNow() }
+    }
+
+    /**
+     * Stops both assistant services, once per invocation.
+     *
+     * The single definition of "the assistant is over" as far as the voice goes. Called
+     * by the X, by the window going away for good, and by the session being destroyed;
+     * safe to call from any of them because of [assistantStopped]. Does nothing if the
+     * session never attached, since then there is no context and no conversation to
+     * stop -- a bridge with no session cannot have started one.
+     */
+    internal fun stopAssistant() {
+        if (assistantStopped) return
+        assistantStopped = true
+        val app = appContext ?: return
+        AssistantInput.stop(app)
+        // The published state is what the popup draws the moment it comes back. A
+        // spinner or an activity line left over from a turn that has been abandoned
+        // would claim the assistant is still working on it.
+        AssistantSessionState.setThinking(false)
+        AssistantSessionState.clearActivity()
     }
 
     /**

@@ -19,9 +19,6 @@ import android.widget.TextView
 import com.blurr.voice.BuildConfig
 import com.blurr.voice.api.GoogleTts
 import com.blurr.voice.api.TTSVoice
-import com.blurr.voice.overlay.OverlayDispatcher
-import com.blurr.voice.overlay.OverlayManager
-import com.blurr.voice.overlay.OverlayPriority
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -519,13 +516,7 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
                 // This deferred will complete when onMarkerReached is called.
                 googleTtsPlaybackDeferred = CompletableDeferred()
 
-                var currentCaptionId = ""
-
                 withContext(Dispatchers.Main) {
-                    currentCaptionId = OverlayDispatcher.show(
-                        chunkText,
-                        OverlayPriority.CAPTION
-                    )
                     utteranceListener?.invoke(true)
                 }
 
@@ -547,8 +538,7 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
                 audioTrack?.flush()
                 
                 withContext(Dispatchers.Main) {
-                        OverlayDispatcher.dismiss(currentCaptionId)
-                        utteranceListener?.invoke(false)
+                    utteranceListener?.invoke(false)
                 }
 
                 Log.d("TTSManager", "Successfully played queued audio chunk: ${chunkText.take(50)}...")
@@ -644,15 +634,8 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
 
             // Correctly signal start and wait for completion.
 
-            var currentCaptionId = ""
-
             withContext(Dispatchers.Main) {
-                currentCaptionId = OverlayDispatcher.show(
-                    chunk,
-                    OverlayPriority.CAPTION
-                )
                 utteranceListener?.invoke(true)
-
             }
 
 
@@ -674,7 +657,6 @@ class TTSManager private constructor(private val context: Context) : TextToSpeec
             audioTrack?.flush()
 
             withContext(Dispatchers.Main) {
-                OverlayDispatcher.dismiss(currentCaptionId)
                 utteranceListener?.invoke(false)
             }
 
