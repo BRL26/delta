@@ -22,6 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import com.blurr.voice.api.GoogleTts
 import com.blurr.voice.api.TTSVoice
 import com.blurr.voice.sidekey.EssentialKeyMapper
+import com.blurr.voice.sidekey.SideKeyActionRegistry
 import com.blurr.voice.ui.app.DeltaDestination
 import com.blurr.voice.ui.app.DeltaNav
 import com.blurr.voice.ui.settings.PressMapping
@@ -212,9 +213,20 @@ class SettingsActivity : AppCompatActivity() {
     private fun selectedVoiceIndex(displayName: String): Int =
         availableVoices.indexOfFirst { it.displayName == displayName }.coerceAtLeast(0)
 
+    /**
+     * What each press currently does, for the four rows.
+     *
+     * Read through [SideKeyActionRegistry.labelFor] rather than off the action spec,
+     * because a press mapped to a chosen app or link resolves to a generic "Open app"
+     * spec: the name the user actually recognises -- "Open Camera" -- comes from the
+     * target, and only the label lookup knows to go and read it.
+     */
     private fun pressMappings(): List<PressMapping> =
         SideKeyActionPicker.pressOrder.map { (gesture, label) ->
-            PressMapping(label, EssentialKeyMapper.actionFor(this, gesture).label)
+            PressMapping(
+                label,
+                SideKeyActionRegistry.labelFor(this, EssentialKeyMapper.actionIdFor(this, gesture)),
+            )
         }
 
     /**

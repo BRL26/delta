@@ -40,7 +40,6 @@ import com.blurr.voice.sidekey.SideKeyEventFilter
 import com.blurr.voice.sidekey.SideKeyEventStream
 import com.blurr.voice.sidekey.SideKeyActionExecutor
 import com.blurr.voice.sidekey.SideKeyActionRegistry
-import com.blurr.voice.sidekey.SideKeyNotifications
 import com.blurr.voice.utilities.TTSManager
 import com.blurr.voice.utilities.TtsVisualizer
 import kotlinx.coroutines.CoroutineScope
@@ -193,13 +192,12 @@ class ScreenInteractionService : AccessibilityService() {
         // Run off the accessibility thread: an action may screenshot, write
         // files, or start an activity, none of which may stall key handling.
         keyScope.launch {
-            val ok = SideKeyActionExecutor.execute(this@ScreenInteractionService, action)
-            if (!ok) {
-                SideKeyNotifications.notify(
-                    applicationContext,
-                    "Side key did not run",
-                    "${action.label} could not be started."
-                )
+            // A failure is logged, not posted. The key the user pressed is not supposed
+            // to say anything, so a "Side key did not run" notification answered a
+            // working key with a claim that it was broken -- on a screen they did not
+            // ask to be told about. Silence is the honest signal now.
+            if (!SideKeyActionExecutor.execute(this@ScreenInteractionService, action)) {
+                Log.w("SideKey", "${action.id} did not run")
             }
         }
     }

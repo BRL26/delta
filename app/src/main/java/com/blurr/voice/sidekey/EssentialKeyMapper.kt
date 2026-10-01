@@ -57,10 +57,19 @@ object EssentialKeyMapper {
     fun actionIdFor(context: Context, gesture: KeyGesture): String? =
         prefs(context).getString(keyFor(gesture), null)
 
-    /** Assigns [actionId] to [gesture]; anything unrecognised stores as "do nothing". */
+    /**
+     * Assigns [actionId] to [gesture]; anything unrecognised stores as "do nothing".
+     *
+     * Validated through [SideKeyActionRegistry.isKnown] rather than against
+     * [SideKeyActionRegistry.actions], because the ids that name a chosen app or link
+     * are deliberately not catalogue entries.
+     */
     fun setActionIdFor(context: Context, gesture: KeyGesture, actionId: String) {
-        val known = SideKeyActionRegistry.actions.firstOrNull { it.id == actionId }
-        val stored = known?.id ?: SideKeyActionRegistry.NONE_ID
+        val stored = if (SideKeyActionRegistry.isKnown(actionId)) {
+            actionId
+        } else {
+            SideKeyActionRegistry.NONE_ID
+        }
         prefs(context).edit().putString(keyFor(gesture), stored).apply()
     }
 
