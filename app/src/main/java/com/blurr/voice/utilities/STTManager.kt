@@ -172,15 +172,26 @@ class STTManager(private val context: Context) {
         }
     }
     
+    /**
+     * Stops the engine if one exists, whether or not it believes it is listening.
+     *
+     * Deliberately not gated on [isListening]. That flag is fed by the engine's own
+     * `onListeningStateChange`, which reads false during the gaps between the short
+     * sessions this manager runs, so a caller that only stops when the flag is set
+     * stops the engine exactly when it is not reporting -- which is when the engine is
+     * still holding the microphone and hearing the speaker. A recogniser existing is
+     * the sufficient condition for stopping it; the flag is the engine's opinion.
+     */
     fun stopListening() {
         CoroutineScope(Dispatchers.Main).launch {
-            if (isListening && speechRecognizer != null) {
-                try {
-                    speechRecognizer?.stopListening()
-                    Log.d("STTManager", "Stopped listening")
-                } catch (e: Exception) {
-                    Log.e("STTManager", "Error stopping speech recognition", e)
-                }
+            val engine = speechRecognizer ?: return@launch
+            try {
+                engine.stopListening()
+                Log.d("STTManager", "Stopped listening")
+            } catch (e: Exception) {
+                Log.e("STTManager", "Error stopping speech recognition", e)
+            } finally {
+                isListening = false
             }
         }
     }

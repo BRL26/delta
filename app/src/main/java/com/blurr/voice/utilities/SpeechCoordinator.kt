@@ -9,6 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.cancellation.CancellationException
@@ -34,8 +37,25 @@ class SpeechCoordinator private constructor(private val context: Context) {
     private val speechMutex = Mutex()
     private var ttsPlaybackJob: Job? = null
     // State tracking
-    private var isSpeaking = false
     private var isListening = false
+
+    /**
+     * Whether audio is coming out of the speaker right now, published so something
+     * that is holding a microphone can get out of the way.
+     *
+     * A flow rather than only [isSpeaking] because the answer is "hold the microphone
+     * shut while the assistant talks", and a microphone cannot ask a question: it needs
+     * to be told when to open and when to shut. Polling a plain getter for that means a
+     * timer in the recogniser, which is a guess about when speech ends rather than the
+     * fact of it.
+     *
+     * Thread-safe because these are written from inside [speechMutex] on whatever
+     * dispatcher the caller happened to be on, and read from the session UI's main
+     * thread. The old plain boolean had the same exposure and got away with it; a flow
+     * does not need the luck.
+     */
+    private val _speaking = MutableStateFlow(false)
+    val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
 
     /**
      * Speak text using TTS, ensuring STT is not listening
@@ -45,14 +65,18 @@ class SpeechCoordinator private constructor(private val context: Context) {
         val cleanedText = text.replace("*", "")
         speechMutex.withLock {
             try {
-                if (isListening) {
-                    Log.d(TAG, "Stopping STT before speaking: $cleanedText")
-                    sttManager.stopListening()
-                    isListening = false
-                    delay(250) // Brief pause to ensure STT is fully stopped
-                }
+                // Unconditional rather than `if (isListening)`. That flag is reported by
+                // the engine, and the engine reports false during the gaps between its
+                // own short sessions -- so the conditional version left the recogniser
+                // running, holding the microphone, and transcribing the reply that was
+                // about to come out of the speaker. Nothing to ask: stopping a
+                // recogniser that was not listening is free.
+                Log.d(TAG, "Stopping STT before speaking: $cleanedText")
+                sttManager.stopListening()
+                isListening = false
+                delay(250) // Brief pause to ensure STT is fully stopped
 
-                isSpeaking = true
+                _speaking.value = true
                 Log.d(TAG, "Starting TTS: $cleanedText")
 
                 // This is a suspend call that will wait until TTS is actually done.
@@ -64,7 +88,7 @@ class SpeechCoordinator private constructor(private val context: Context) {
 
             } finally {
                 // Ensure the speaking flag is always reset
-                isSpeaking = false
+                _speaking.value = false
             }
         }
     }
@@ -77,14 +101,15 @@ class SpeechCoordinator private constructor(private val context: Context) {
         val cleanedText = text.replace("*", "")
         speechMutex.withLock {
             try {
-                if (isListening) {
-                    Log.d(TAG, "Stopping STT before speaking to user: $cleanedText")
-                    sttManager.stopListening()
-                    isListening = false
-                    delay(250) // Brief pause
-                }
+                // Unconditional for the same reason as speakText: isListening is the
+                // engine's own report, and false is exactly what it says while it is
+                // still holding the microphone.
+                Log.d(TAG, "Stopping STT before speaking to user: $cleanedText")
+                sttManager.stopListening()
+                isListening = false
+                delay(250) // Brief pause
 
-                isSpeaking = true
+                _speaking.value = true
                 Log.d(TAG, "Starting TTS to user: $cleanedText")
 
                 ttsManager.speakToUser(cleanedText)
@@ -94,7 +119,7 @@ class SpeechCoordinator private constructor(private val context: Context) {
 
             } finally {
                 // Ensure the speaking flag is always reset
-                isSpeaking = false
+                _speaking.value = false
             }
         }
     }
@@ -107,13 +132,23 @@ class SpeechCoordinator private constructor(private val context: Context) {
         ttsPlaybackJob = CoroutineScope(Dispatchers.IO).launch {
             speechMutex.withLock {
                 try {
-                    if (isListening) {
-                        sttManager.stopListening()
-                        isListening = false
-                        delay(200)
-                    }
+                    // Unconditional: see speakText. Every path that makes the phone
+                    // speak has to actually free the microphone first, whether or not
+                    // the engine thinks it is using it.
+                    sttManager.stopListening()
+                    isListening = false
+                    delay(200)
                     // Directly use the TTSManager's playback function
-                    ttsManager.playAudioData(data)
+                    // Announced through [speaking] like the synthesised paths, because it
+                    // is the same problem: audio out of the speaker while something is
+                    // holding a microphone. A settings-screen voice preview is not a reply
+                    // to anybody, but it is still the phone talking.
+                    _speaking.value = true
+                    try {
+                        ttsManager.playAudioData(data)
+                    } finally {
+                        _speaking.value = false
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -133,16 +168,21 @@ class SpeechCoordinator private constructor(private val context: Context) {
         ttsPlaybackJob = CoroutineScope(Dispatchers.IO).launch {
             speechMutex.withLock {
                 try {
-                    if (isListening) {
-                        sttManager.stopListening()
-                        isListening = false
-                        delay(200)
-                    }
+                    // Unconditional: see speakText.
+                    sttManager.stopListening()
+                    isListening = false
+                    delay(200)
                     // 1. Synthesize audio with the specific voice HERE
                     val audioData = GoogleTts.synthesize(text, voice)
 
-                    // 2. Play the synthesized audio data
-                    ttsManager.playAudioData(audioData)
+                    // 2. Play the synthesized audio data, announced through [speaking] like every
+                    // other path that makes the phone talk out loud.
+                    _speaking.value = true
+                    try {
+                        ttsManager.playAudioData(audioData)
+                    } finally {
+                        _speaking.value = false
+                    }
 
                 } catch (e: CancellationException) {
                     throw e
@@ -156,6 +196,9 @@ class SpeechCoordinator private constructor(private val context: Context) {
     fun stop() {
         // Cancel the coroutine managing the playback
         ttsPlaybackJob?.cancel(CancellationException("Playback stopped by user action"))
+        // Same reasoning as stopSpeaking: a stop that leaves the published state lying
+        // would hand the microphone the wrong answer about whether the phone is talking.
+        _speaking.value = false
         // Call the underlying TTS Manager's stop function to halt the hardware
         ttsManager.stop()
         Log.d(TAG, "All TTS playback stopped by coordinator.")
@@ -171,11 +214,12 @@ class SpeechCoordinator private constructor(private val context: Context) {
         speechMutex.withLock {
             try {
 
-                // If TTS is speaking, wait for it to complete. This loop is now
-                // much more efficient as isSpeaking is updated accurately.
-                if (isSpeaking) {
+                // If TTS is speaking, wait for it to complete. Reading the flow rather
+                // than a plain flag is what makes this a wait on the fact of speech
+                // ending instead of on a field that might be written by another thread.
+                if (_speaking.value) {
                     Log.d(TAG, "Waiting for TTS to complete before starting STT")
-                    while (isSpeaking) {
+                    while (_speaking.value) {
                         delay(100) // Check every 100ms
                     }
                     delay(250) // Additional pause after TTS completes
@@ -207,15 +251,20 @@ class SpeechCoordinator private constructor(private val context: Context) {
     }
     fun stopSpeaking() {
         ttsManager.stop()
+        // Cleared rather than left to the caller's finally block, because "stop now" is
+        // exactly when something downstream is waiting to be told the phone has gone
+        // quiet. Leaving it set would keep a microphone shut against a speaker that has
+        // already stopped, which is a worse failure than the echo this flag prevents.
+        _speaking.value = false
         Log.d("SpeechCoordinator", "Speaking explicitly stopped.")
     }
 
 
-    fun isCurrentlySpeaking(): Boolean = isSpeaking
+    fun isCurrentlySpeaking(): Boolean = _speaking.value
 
     fun isCurrentlyListening(): Boolean = isListening
 
-    fun isSpeechActive(): Boolean = isSpeaking || isListening
+    fun isSpeechActive(): Boolean = _speaking.value || isListening
 
     suspend fun waitForSpeechCompletion() {
         while (isSpeechActive()) {

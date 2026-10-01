@@ -38,6 +38,16 @@ data class VoiceInputState(
      */
     val listening: Boolean = false,
     /**
+     * The microphone is wanted but is being held shut because the assistant is talking.
+     *
+     * Separate from [listening] because the two answers mean different things to the
+     * person looking at the bar: "Listening" next to a live Stop button claims the
+     * phone is hearing them right now, and when it is not, the assistant ends up
+     * transcribing its own voice. This is the bar's honest third state -- wanted,
+     * not open -- and it is what lets the row say so instead of lying or flicking.
+     */
+    val hushed: Boolean = false,
+    /**
      * Growing transcript shown under the mic while the user speaks.
      *
      * Covers the words already finished *and* the utterance still in progress, joined
@@ -106,6 +116,20 @@ data class VoiceInputState(
  * for [InactivitySendMillis], which makes the wait self-cancelling -- there is no separate
  * "still talking" flag to get wrong. A second sentence before the deadline extends it
  * instead of starting a second message.
+ *
+ * ## Why the microphone shuts while the assistant talks
+ *
+ * An open microphone hears the speaker. That was handled for a while by dropping any
+ * transcript that arrived while the assistant was mid-sentence, which is right and not
+ * enough: the send is held for [InactivitySendMillis], so a short reply finishes speaking
+ * *during* the wait, the check finds nothing playing, and the echo of the assistant's own
+ * voice goes out as a request. The assistant then answers a question nobody asked, which
+ * is the bug this class of change exists to stop.
+ *
+ * So the microphone is not asked to listen at all while the phone is talking. The user's
+ * intent is remembered separately from the engine -- [keepAlive] is the intent, the engine
+ * is the consequence -- so a microphone the user opened during the reply comes back by
+ * itself when the reply ends, without the bar ever claiming the microphone had gone.
  */
 class VoiceInputController(context: Context) {
 
@@ -164,6 +188,34 @@ class VoiceInputController(context: Context) {
     @Volatile
     private var keepAlive = false
 
+    /**
+     * Whether the phone is currently talking, which the microphone must not hear.
+     *
+     * Set from the session UI, which is where the speaker is observable, rather than
+     * observed from inside here: this class wraps an engine and deliberately knows
+     * nothing about text to speech. What it does own is the consequence -- an engine is
+     * not asked to listen while this is true.
+     */
+    @Volatile
+    private var assistantSpeaking = false
+
+    /**
+     * Set around the one call that shuts the engine down on purpose, so the error it
+     * raises is recognised as ours rather than treated as a failure.
+     *
+     * `cancel()` reports `ERROR_CLIENT` by design, and the general error path treats any
+     * unrecognised error as "the recogniser is broken": it closes the microphone and puts
+     * an error on the bar. Without this, hushing the microphone for every reply would
+     * report the recogniser as broken every single time.
+     *
+     * Scoped to a session rather than to the hush, and cleared when a new one is asked
+     * for. The error arrives on the main thread from the engine's own thread, so it lands
+     * after the flag is set; it cannot arrive before the *next* [launchSession], because
+     * the engine has not been asked for one yet.
+     */
+    @Volatile
+    private var hushingSession = false
+
     /** Guards against two restarts being queued for the same gap. */
     private var restartQueued = false
 
@@ -180,6 +232,9 @@ class VoiceInputController(context: Context) {
         restartQueued = false
         main.removeCallbacksAndMessages(RESTART_TOKEN)
         restoreSystemSounds(appContext)
+        // Hushed is a fact about keepAlive, so it cannot outlive it: turning the
+        // microphone off for good is what clears it, not the assistant finishing.
+        if (_state.value.hushed) _state.value = _state.value.copy(hushed = false)
     }
 
     /**
@@ -220,6 +275,10 @@ class VoiceInputController(context: Context) {
      * Returns false when the request could not be made at all, so the caller can explain
      * why instead of leaving a dead button. Idempotent: asking again while it is already
      * open does nothing, so a recomposition cannot cause a restart.
+     *
+     * Returns true, with the microphone shut rather than open, when the assistant is
+     * currently speaking. The user has asked for a microphone and will get one; taking
+     * it now would only hear the speaker. [assistantSpeakingChanged] opens it.
      */
     fun start(): Boolean {
         refreshPermission()
@@ -243,7 +302,52 @@ class VoiceInputController(context: Context) {
         // listening is set before the engine is asked, and is not cleared again until
         // stop/cancel. That is the whole trick described on the class.
         _state.value = _state.value.copy(listening = true, partial = "", error = null)
+        if (assistantSpeaking) {
+            Log.i(TAG, "Microphone asked for while the assistant is speaking; holding it shut")
+            return true
+        }
         return launchSession()
+    }
+
+    /**
+     * Tells the controller the phone has started or stopped talking, and moves the
+     * microphone accordingly.
+     *
+     * Safe to call on any transition, including repeats, and from the composable's
+     * collector: the guard is the flag itself, so a recomposition that re-announces the
+     * same state does nothing.
+     */
+    fun assistantSpeakingChanged(speaking: Boolean) {
+        if (assistantSpeaking == speaking) return
+        assistantSpeaking = speaking
+        if (speaking) {
+            // Anything the recogniser made of the speaker is thrown away rather than
+            // held. It is not a misheard word, it is a whole wrong sentence, and holding
+            // it would carry it past the point where this guard applies and out to the
+            // agent three seconds later.
+            discardPending()
+            _state.value = _state.value.copy(partial = "", hushed = keepAlive)
+            if (!keepAlive) return
+
+            // The engine has to actually let go of the microphone, not merely stop being
+            // read. An engine left running keeps hearing the speaker, and the only reason
+            // to shut it rather than merely ignore it is that the whole point is not
+            // having the phone transcribe itself.
+            restartQueued = false
+            main.removeCallbacksAndMessages(RESTART_TOKEN)
+            hushingSession = true
+            runCatching { recognizer?.cancel() }
+                .onFailure { Log.w(TAG, "Could not hush the recogniser", it) }
+            Log.i(TAG, "Assistant started speaking; microphone hushed")
+            return
+        }
+
+        // Speech is over. [keepAlive] is what decides, so a microphone opened during the
+        // reply -- or left open before it -- comes back without the UI having to notice.
+        if (_state.value.hushed) _state.value = _state.value.copy(hushed = false)
+        if (!keepAlive) return
+        Log.i(TAG, "Assistant stopped speaking; microphone reopening")
+        launchSession()
     }
 
     /** Closes the microphone. [start] is needed to open it again. */
@@ -300,6 +404,10 @@ class VoiceInputController(context: Context) {
      * opening the microphone a second time.
      */
     private fun launchSession(): Boolean {
+        // Whatever the previous session was doing is finished with; an error from here on
+        // is a real error again. Set before the engine is asked, so an error racing the
+        // request cannot be mistaken for the hush it replaced.
+        hushingSession = false
         val engine = recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext)
             .also { created ->
                 created.setRecognitionListener(listener)
@@ -329,6 +437,11 @@ class VoiceInputController(context: Context) {
      */
     private fun queueRestart(delayMillis: Long = RestartDelayMillis) {
         if (!keepAlive || restartQueued) return
+        // Not asked for while the phone is talking. Every path that would re-ask the
+        // engine goes through here, so this is the one place that has to know; a restart
+        // queued during a reply would open the microphone on the strength of an utterance
+        // the user had finished before it started.
+        if (assistantSpeaking) return
         restartQueued = true
         main.postAtTime(
             {
@@ -484,6 +597,15 @@ class VoiceInputController(context: Context) {
         }
 
         override fun onError(error: Int) {
+            // Ours, not the engine's: this session was shut down because the assistant
+            // started speaking. Swallowed deliberately, because the general error path
+            // below reports an unrecognised error as a broken recogniser -- it closes the
+            // microphone and puts an error on the bar -- and doing that on every reply
+            // would be worse than the echo it prevents.
+            if (hushingSession) {
+                Log.i(TAG, "Ignoring error $error from a session hushed on purpose")
+                return
+            }
             when (error) {
                 // Not hearing anything is the normal state of an open microphone between
                 // sentences, not a failure. Reporting it is what made the bar flash an

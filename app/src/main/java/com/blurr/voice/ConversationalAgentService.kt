@@ -432,12 +432,15 @@ class ConversationalAgentService : Service() {
 //            updateSystemPromptWithMemories()
 //        }
         updateSystemPromptWithTime()
-        deltaStateManager.setState(DeltaState.SPEAKING)
-        speechCoordinator.speakText(text)
-        Log.d("ConvAgent", "Delta said: $text")
         // Into the assistant popup's transcript, which is the same funnel: every reply,
         // question, clarification and farewell is spoken through here, so this is the one
         // place that catches all of them without repeating itself at each call site.
+        //
+        // Published *before* the audio, not after. speakText suspends until playback has
+        // finished, so doing this the other way round left the popup on its thinking
+        // spinner for the whole length of the answer -- several seconds of "thinking"
+        // and then the words the user had already been reading out loud. The transcript is
+        // something the user reads; the audio is something that follows it.
         //
         // Thinking is cleared at the same moment. The popup's spinner is tied to "a
         // request is outstanding", and a reply arriving is exactly that becoming false --
@@ -446,6 +449,10 @@ class ConversationalAgentService : Service() {
         AssistantSessionState.reply(text)
         AssistantSessionState.setThinking(false)
         AssistantSessionState.clearActivity()
+
+        deltaStateManager.setState(DeltaState.SPEAKING)
+        speechCoordinator.speakText(text)
+        Log.d("ConvAgent", "Delta said: $text")
         // The same reason as in startImmediateListening: the popup is up and listening.
         // Not gated on the text-mode flag because this is a different situation -- the
         // user is not typing here, the popup just happens to be what they are talking to

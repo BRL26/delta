@@ -997,10 +997,15 @@ private fun MicBar(
 
                 else -> Text(
                     text = stringResource(
-                        if (voiceState.listening) {
-                            R.string.assistant_listening
-                        } else {
-                            R.string.assistant_tap_to_talk
+                        when {
+                            // Not "Listening". The microphone is wanted but is not open,
+                            // and claiming otherwise next to a live Stop button is how the
+                            // assistant ends up transcribing its own voice -- the user is
+                            // told it can hear them, so they keep talking, and it hears
+                            // itself instead. Saying why it is waiting is the honest label.
+                            voiceState.hushed -> R.string.assistant_mic_hushed
+                            voiceState.listening -> R.string.assistant_listening
+                            else -> R.string.assistant_tap_to_talk
                         },
                     ),
                     style = MaterialTheme.typography.bodyMedium,
@@ -1019,10 +1024,14 @@ private fun MicBar(
         ) {
             Icon(
                 imageVector = when {
+                    voiceState.hushed -> Icons.Filled.MicOff
                     voiceState.listening -> Icons.Filled.Stop
                     !voiceState.permissionGranted -> Icons.Filled.MicOff
                     else -> Icons.Filled.Mic
                 },
+                // Still "stop": the microphone is open as far as the user is concerned,
+                // they asked for it, and the way to change your mind is the same button
+                // whatever is currently holding it shut.
                 contentDescription = stringResource(
                     if (voiceState.listening) {
                         R.string.assistant_stop_listening

@@ -132,6 +132,10 @@
     <string name="assistant_listening">Listening…</string>
     <string name="assistant_start_listening">Start listening</string>
     <string name="assistant_stop_listening">Stop listening</string>
+    <!-- Said while the assistant is talking. Deliberately explains the wait rather than
+         saying "Listening", because it is not: the microphone is closed so the assistant
+         cannot hear its own reply. -->
+    <string name="assistant_mic_hushed">Paused — it\'s talking</string>
     <string name="assistant_switch_to_text">Switch to typing</string>
     <string name="assistant_switch_to_mic">Switch to voice</string>
     <string name="assistant_mic_needs_permission">Microphone access is needed to talk
